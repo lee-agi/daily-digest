@@ -1,0 +1,224 @@
+"""LLM-based digest report generation using Opus.
+
+Summary prompt style references:
+- any2summary/prompts/article_summary_prompt.txt
+- any2summary/prompts/summary_prompt.txt
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime
+
+from aggregator.dedup import deduplicate
+from aggregator.merger import group_by_category
+from schema import ContentItem, DigestReport
+
+logger = logging.getLogger(__name__)
+
+# Summary prompt inspired by any2summary style
+DIGEST_PROMPT = """你是一个多源信息聚合摘要助手。你的任务是将来自多个平台（Twitter/X、GitHub、Reddit、YouTube、知乎、即刻、小宇宙、HuggingFace、papers.cool、Apple Podcast、微信读书）的内容条目，生成一份高质量的每日精选报告。
+
+## 输入
+以下是按分类整理的内容条目（JSON 格式）：
+
+{categorized_json}
+
+## 输出要求
+
+### 1. Today's Top {top_n} Headlines
+- 从全部条目中选出最重要/最有影响力的 {top_n} 条，每条用一句话概括
+- 重要的、insightful、非共识的内容用 **加粗** 标识
+- 每条附上原文链接
+
+### 2. 跨平台主题分析
+- 找出跨多个平台重复出现的主题或趋势
+- 用 2-3 段话分析这些趋势的意义
+- 专业词汇和人名不要翻译（如 agent、LLM、Sam）
+
+### 3. 分类详情
+按以下分类生成详细摘要，每个分类：
+- 总结：不超过 5 句话，包含非共识的 insight
+- 要点：层次化、结构化展现，每个要点是一个观点/结论/事实
+- 每条内容保留原文链接和作者
+- 如果是非中文内容，专业表达保留原文，口语化部分翻译成中文
+
+分类列表：{categories}
+
+### 4. 平台统计
+- 各平台采集数量
+- 总条目数
+
+## 翻译规范
+1. 专业词汇和人名不翻译，例如 `agent`、`LLM`、`Sam`，或后面加原始词如：费曼图（Feynman diagram）
+2. 不要压缩、省略或遗漏任何关键信息
+3. 将重要的、insightful 的内容用 markdown **加粗** 标识，特别重要的用 `高亮`
+
+请输出完整的 Markdown 格式报告。
+"""
+
+
+async def generate_digest_report(
+    items: list[ContentItem],
+    config: dict,
+    target_date: str,
+) -> DigestReport:
+    """Generate a full digest report using Opus LLM."""
+    summary_config = config.get("summary", {})
+    categories = summary_config.get("categories", [
+        "AI Models & Research", "Developer Tools", "Research Papers",
+        "Videos & Podcasts", "Books & Reading", "Social & Community",
+    ])
+    top_n = summary_config.get("top_headlines", 5)
+
+    # Deduplicate across all sources
+    deduped = deduplicate(items)
+    logger.info("After dedup: %d items (from %d)", len(deduped), len(items))
+
+    # Group by category
+    grouped = group_by_category(deduped, categories)
+
+    # Prepare categorized data for LLM
+    categorized_for_llm = {}
+    for cat, cat_items in grouped.items():
+        if not cat_items:
+            continue
+        categorized_for_llm[cat] = [
+            {
+                "title": item.title,
+                "author": item.author,
+                "source": item.source,
+                "url": item.url,
+                "content": item.content[:500],  # Truncate for LLM context
+                "score": item.score,
+                "published_at": item.published_at.isoformat(),
+                "tags": item.tags,
+            }
+            for item in cat_items
+        ]
+
+    prompt = DIGEST_PROMPT.format(
+        categorized_json=json.dumps(categorized_for_llm, ensure_ascii=False, indent=2),
+        top_n=top_n,
+        categories=", ".join(categories),
+    )
+
+    # Call LLM (placeholder - will be implemented in Phase 6)
+    full_markdown = await _call_llm(prompt, config)
+
+    # Build report header
+    header = f"""# Daily Digest - {target_date}
+
+> Generated at {datetime.now().strftime('%Y-%m-%d %H:%M')} | {len(deduped)} items from {len(set(i.source for i in deduped))} sources
+
+---
+
+"""
+
+    # Stats
+    stats = {
+        "total_items": len(deduped),
+        "sources": {
+            source: len([i for i in deduped if i.source == source])
+            for source in set(i.source for i in deduped)
+        },
+        "categories": {
+            cat: len(items) for cat, items in grouped.items() if items
+        },
+    }
+
+    stats_section = "\n\n---\n\n## Platform Statistics\n\n"
+    stats_section += "| Platform | Items |\n|----------|-------|\n"
+    for source, count in sorted(stats["sources"].items()):
+        stats_section += f"| {source} | {count} |\n"
+    stats_section += f"| **Total** | **{stats['total_items']}** |\n"
+
+    full_report = header + full_markdown + stats_section
+
+    return DigestReport(
+        date=target_date,
+        headline_summary="",  # Extracted by LLM
+        category_sections={cat: "" for cat in categories},
+        full_markdown=full_report,
+        stats=stats,
+        items_count=len(deduped),
+        sources_count=len(stats["sources"]),
+    )
+
+
+async def _call_llm(prompt: str, config: dict) -> str:
+    """Call LLM for summary generation via Azure OpenAI Responses API.
+
+    Uses Opus model via Azure OpenAI endpoint.
+    Falls back to placeholder if API is not configured.
+    """
+    import os
+    import httpx
+
+    api_key = os.environ.get("AZURE_OPENAI_API_KEY", "")
+    base_url = os.environ.get("AZURE_OPENAI_BASE_URL", "")
+    api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2025-03-01-preview")
+
+    if not api_key or not base_url:
+        logger.warning("Azure OpenAI not configured. Using fallback template.")
+        return _generate_fallback_report(prompt)
+
+    # Use Responses API endpoint
+    url = f"{base_url}/responses?api-version={api_version}"
+
+    # Model: use the configured model or default
+    model = os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME", "llab-gpt-5.2-codex")
+
+    payload = {
+        "model": model,
+        "input": prompt,
+        "max_output_tokens": 16000,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(
+                url,
+                json=payload,
+                headers={
+                    "api-key": api_key,
+                    "Content-Type": "application/json",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            # Extract text from Responses API format
+            output = data.get("output", [])
+            text_parts = []
+            for item in output:
+                if item.get("type") == "message":
+                    for content in item.get("content", []):
+                        if content.get("type") == "output_text":
+                            text_parts.append(content.get("text", ""))
+            result = "\n".join(text_parts)
+
+            if not result:
+                # Fallback: try direct text field
+                result = data.get("output_text", "")
+
+            if result:
+                logger.info("LLM summary generated: %d chars", len(result))
+                return result
+            else:
+                logger.warning("LLM returned empty response, using fallback")
+                return _generate_fallback_report(prompt)
+
+    except httpx.HTTPError as e:
+        logger.error("LLM API call failed: %s", e)
+        return _generate_fallback_report(prompt)
+
+
+def _generate_fallback_report(prompt: str) -> str:
+    """Generate a basic report without LLM when API is unavailable."""
+    return (
+        "## Summary\n\n"
+        "_LLM summary unavailable. Raw collected data saved in intermediate JSON._\n\n"
+        f"_Prompt prepared: {len(prompt)} chars for LLM processing._\n"
+    )

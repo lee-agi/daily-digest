@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  rsshub:
+    image: diygod/rsshub:latest
+    container_name: rsshub
+    restart: unless-stopped
+    ports:
+      - "1200:1200"
+    environment:
+      # Proxy for GFW bypass
+      PROXY_URI: http://host.docker.internal:7890
+
+      # Cache settings
+      CACHE_TYPE: memory
+      CACHE_EXPIRE: 300
+
+      # Cookies for authenticated sources
+      # Set these via .env file or export before docker-compose up
+      ZHIHU_COOKIES: ${ZHIHU_COOKIES:-}
+      JIKE_COOKIES: ${JIKE_COOKIES:-}
+
+      # Rate limiting
+      REQUEST_TIMEOUT: 30000
+      REQUEST_RETRY: 3
+
+      # Logging
+      NODE_ENV: production
+      DEBUG_INFO: "false"
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:1200/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

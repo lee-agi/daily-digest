@@ -1,0 +1,155 @@
+# Daily Digest Configuration
+# All thresholds are configurable per source.
+# To add a new source: create a collector class, then add config here.
+
+general:
+  lookback_hours: 24          # Default time window for all sources
+  max_items_per_source: 100   # Default max items per source
+  output_dir: ~/Developer/research/daily-digest
+  intermediate_dir: ./data    # JSON intermediate files
+  log_level: INFO
+
+sources:
+  x_twitter:
+    enabled: true
+    source_type: browser_relay
+    score_threshold: 0         # No threshold for X lists (curated already)
+    lookback_hours: 24
+    max_items: 50
+    lists:
+      LLM: "1664234382868250624"
+      Product: "1934043689183256997"
+      BigV: "1763074297319567721"
+
+  github:
+    enabled: true
+    source_type: api
+    score_threshold: 5         # Minimum stars on release/PR
+    lookback_hours: 24
+    max_items: 30
+    # repos: auto-detected from GitHub stars/following
+    # token: from env GITHUB_TOKEN
+
+  reddit:
+    enabled: true
+    source_type: api
+    score_threshold: 50        # Minimum upvotes
+    lookback_hours: 24
+    max_items: 30
+    subreddits:
+      - LocalLLaMA
+      - MachineLearning
+      - artificial
+    # client_id/secret: from env REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET
+
+  youtube:
+    enabled: true
+    source_type: rss
+    score_threshold: 0         # RSS has no score, rely on subscriptions
+    lookback_hours: 24
+    max_items: 20
+    channels: []               # Fill in YouTube channel IDs
+
+  zhihu:
+    enabled: true
+    source_type: rss
+    score_threshold: 100       # Minimum voteup
+    lookback_hours: 24
+    max_items: 20
+    rsshub_base: http://localhost:1200
+    route: /zhihu/hot
+
+  jike:
+    enabled: true
+    source_type: rss
+    score_threshold: 50        # Minimum likes
+    lookback_hours: 24
+    max_items: 20
+    rsshub_base: http://localhost:1200
+    route: /jike/user/{user_id}
+    user_ids: []               # Fill in Jike user IDs
+
+  xiaoyuzhou:
+    enabled: true
+    source_type: rss
+    score_threshold: 0
+    lookback_hours: 24
+    max_items: 20
+    rsshub_base: http://localhost:1200
+    route: /xiaoyuzhou/podcast/{podcast_id}
+    podcast_ids: []            # Fill in podcast IDs
+
+  huggingface:
+    enabled: true
+    source_type: http_scrape
+    score_threshold: 20        # Minimum daily likes
+    lookback_hours: 24
+    max_items: 20
+
+  coolpaper:
+    enabled: true
+    source_type: http_scrape
+    score_threshold: 20        # Minimum reading stars
+    lookback_hours: 24
+    max_items: 20
+
+  apple_podcast:
+    enabled: true
+    source_type: rss
+    score_threshold: 0
+    lookback_hours: 24
+    max_items: 20
+    feeds: []                  # Fill in Apple Podcast RSS URLs
+
+  anthropic:
+    enabled: true
+    source_type: http_scrape
+    score_threshold: 0
+    lookback_hours: 168        # 7天窗口（博客更新频率低）
+    max_items: 20
+
+  openai:
+    enabled: true
+    source_type: rss
+    score_threshold: 0
+    lookback_hours: 168
+    max_items: 20
+
+  google_blog:
+    enabled: true
+    source_type: rss
+    score_threshold: 0
+    lookback_hours: 168
+    max_items: 20
+    feeds:
+      - https://blog.google/innovation-and-ai/rss/
+      - https://blog.google/technology/ai/rss/
+
+  weread:
+    enabled: true
+    source_type: browser_relay
+    score_threshold: 0
+    lookback_hours: 24
+    max_items: 10
+
+# Summary configuration
+summary:
+  model: opus                  # Single-pass Opus summary
+  categories:
+    - "AI Models & Research"
+    - "Developer Tools"
+    - "Research Papers"
+    - "Videos & Podcasts"
+    - "Books & Reading"
+    - "Social & Community"
+  top_headlines: 5
+
+# Distribution
+distribution:
+  rss_worker:
+    enabled: true
+    url: https://rss-worker.zcwtuibian.workers.dev
+    # api_key: from env RSS_API_KEY
+  feishu:
+    enabled: true
+    # Uses OpenClaw agent channel
