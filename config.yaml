@@ -12,7 +12,7 @@ general:
 sources:
   x_twitter:
     enabled: true
-    source_type: browser_relay
+    source_type: api
     score_threshold: 0         # No threshold for X lists (curated already)
     lookback_hours: 24
     max_items: 100
@@ -20,6 +20,11 @@ sources:
       LLM: "1664234382868250624"
       Product: "1934043689183256997"
       BigV: "1763074297319567721"
+    # Primary path: TwitterAPI.io (env var stored in ~/.secrets)
+    api_key_env: TWITTER_API_IO_KEY
+    # Fallback path: twikit cookie auth
+    auth_token_env: X_AUTH_TOKEN
+    ct0_env: X_CT0
 
   github:
     enabled: true

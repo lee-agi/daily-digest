@@ -171,3 +171,17 @@
 - **Why**: Product Hunt 以 PST/PDT 自然日为产品发布日（每日排行榜按 PT 时区重置），使用 UTC 边界会导致截断当天部分产品或混入前一天产品
 - **Alternatives**: (1) 使用 UTC 当天边界 — 偏差约 8 小时，导致每天 0-8 点 UTC 抓到 PH 前一天末尾内容; (2) lookback_hours=24 滚动窗口 — 不与 PH 日历边界对齐，可能重复或遗漏
 - **Consequences**: `lookback_hours` 配置项保留（作为占位，不影响实际查询逻辑）；夏令时自动由 `zoneinfo` 处理
+
+## 2026-02-26: X/Twitter Collector 重写 (v0.13.0)
+
+### Decision 25: X/Twitter 采集方案 — TwitterAPI.io 主路径 + twikit 降级备选
+- **Decision**: 完全重写 `collectors/x_twitter.py`，使用 TwitterAPI.io REST API 为主路径（`TWITTER_API_IO_KEY`），twikit cookie 认证（`X_AUTH_TOKEN`/`X_CT0`）为降级备选；删除 Browser Relay 占位符代码
+- **Why**: Browser Relay 方案从未工作（`collect()` 直接返回 `[]`），Chrome CDP 依赖导致高维护成本、低准确率；TwitterAPI.io 提供稳定的第三方 Public List API，99.99% SLA，API key 长期有效；twikit 作为 $0 降级方案，Public List 无需 OAuth，cookie 偶尔过期时维护成本也低
+- **Alternatives**: (1) 纯 twikit — 免费但 cookie 过期需手动刷新，稳定性次于付费 API; (2) 官方 Twitter API v2 — 免费层过于受限（1500 reads/月），List Tweets 需付费订阅（$100+/月）; (3) 维持占位符现状 — X/Twitter 来源永远不工作
+- **Consequences**: 每月需支付 ~$2-5 TwitterAPI.io 费用（按实际 API 调用量）；`source_type` 从 `browser_relay` 改为 `api`；版本从 v0.12.0 → v0.13.0（MINOR，新增功能实现）；pyproject.toml 版本从 v0.9.0 一并修正为 v0.13.0
+
+### Decision 26: twikit 安装方式 — uv pip install 到 .venv
+- **Decision**: 使用 `uv pip install twikit` 安装到项目 `.venv`，并在 `pyproject.toml` dependencies 中添加 `twikit>=2.3`
+- **Why**: 项目使用 uv 管理虚拟环境（`.venv`），依赖应声明在 `pyproject.toml` 中保持一致性；`--break-system-packages` 方式安装到系统 Python 不影响 `.venv`
+- **Alternatives**: (1) 在 `pyproject.toml` 中保持为 optional dependency — twikit 是降级路径，理论上可选，但实际要用到故作为必选更简单; (2) lazy import + 运行时安装提示 — 过度复杂
+- **Consequences**: twikit 2.3.3 安装（带 pyjsparser/webvtt-py 等依赖）；测试套件中 patch("twikit.Client") 可正常工作

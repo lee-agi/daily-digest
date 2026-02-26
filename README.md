@@ -2,7 +2,7 @@
 
 每日多源信息聚合系统，自动从 18 个平台采集内容，去重过滤后生成 LLM 摘要报告。
 
-**当前版本**: v0.12.0 | **活跃源**: 15/18 | **典型产出**: ~360 items/run
+**当前版本**: v0.13.0 | **活跃源**: 16/18 | **典型产出**: ~360 items/run
 
 ## Quick Start
 
@@ -29,7 +29,7 @@ python orchestrator.py --collect-only --source huggingface  # 单源测试
 
 | Platform | Method | Auth Required |
 |----------|--------|---------------|
-| X/Twitter | Browser Relay | Chrome login |
+| X/Twitter | TwitterAPI.io (+ twikit fallback) | TWITTER_API_IO_KEY (+ X_AUTH_TOKEN/X_CT0) |
 | GitHub | REST API | GITHUB_TOKEN (optional) |
 | Reddit | OAuth2/Public API | REDDIT_CLIENT_ID/SECRET (optional) |
 | YouTube | Native RSS | None |
