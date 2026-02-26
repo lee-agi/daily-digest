@@ -1,4 +1,10 @@
-"""CoolPaper (papers.cool) collector via HTTP scraping."""
+"""CoolPaper (papers.cool) collector via HTTP scraping.
+
+papers.cool organizes papers by arXiv category. We scrape AI-related
+category pages (/arxiv/cs.AI, /arxiv/cs.CL, /arxiv/cs.LG) to get the
+latest papers. The page lists papers ranked by position; reading stars
+are loaded asynchronously via JS and not available in the HTML.
+"""
 
 from __future__ import annotations
 
@@ -18,128 +24,87 @@ logger = logging.getLogger(__name__)
 COOLPAPER_URL = "https://papers.cool"
 ARXIV_PATTERN = re.compile(r'(\d{4}\.\d{4,5})')
 
+# AI-related arXiv categories to scrape
+DEFAULT_CATEGORIES = ["cs.AI", "cs.CL", "cs.LG"]
+
 
 class CoolPaperCollector(BaseCollector):
     """Collect trending papers from papers.cool."""
     source_name = "coolpaper"
     source_type = SourceType.HTTP_SCRAPE
 
+    def __init__(self, config: dict[str, Any]) -> None:
+        super().__init__(config)
+        self.categories = config.get("categories", DEFAULT_CATEGORIES)
+
     async def collect(self) -> list[ContentItem]:
         items = []
+        seen_ids: set[str] = set()
+
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            try:
-                resp = await client.get(
-                    COOLPAPER_URL,
-                    headers={"User-Agent": "daily-digest/0.1.0"},
-                )
-                resp.raise_for_status()
-            except httpx.HTTPError as e:
-                logger.error("[coolpaper] Failed to fetch: %s", e)
-                return []
+            for category in self.categories:
+                url = f"{COOLPAPER_URL}/arxiv/{category}"
+                try:
+                    resp = await client.get(
+                        url,
+                        headers={"User-Agent": "daily-digest/0.1.0"},
+                    )
+                    resp.raise_for_status()
+                except httpx.HTTPError as e:
+                    logger.error("[coolpaper] Failed to fetch %s: %s", url, e)
+                    continue
 
-        soup = BeautifulSoup(resp.text, "lxml")
+                soup = BeautifulSoup(resp.text, "lxml")
+                for paper_el in soup.select("div.paper"):
+                    item = self._parse_paper_element(paper_el, category)
+                    if item and item.arxiv_id and item.arxiv_id not in seen_ids:
+                        seen_ids.add(item.arxiv_id)
+                        items.append(item)
 
-        # papers.cool lists papers with title, link, and star counts
-        for paper_el in soup.select("div.paper-item, article.paper, .paper-card"):
-            item = self._parse_paper_element(paper_el)
-            if item and item.published_at >= self.cutoff_time:
-                items.append(item)
-
-        # Fallback: try to parse from script/JSON data
-        if not items:
-            items = await self._try_api_endpoint(httpx.AsyncClient(timeout=30))
-
+        logger.info("[coolpaper] Parsed %d papers from %d categories",
+                    len(items), len(self.categories))
         return items
 
-    def _parse_paper_element(self, el) -> ContentItem | None:
+    def _parse_paper_element(self, el, category: str) -> ContentItem | None:
         """Parse a paper element from the HTML."""
-        title_el = el.select_one("h2, h3, .title, a.paper-title")
-        if not title_el:
+        # Title is in a.title-link inside h2.title
+        title_link = el.select_one("a.title-link")
+        if not title_link:
             return None
 
-        title = title_el.get_text(strip=True)
-        link = ""
-        a_tag = title_el.find("a") if title_el.name != "a" else title_el
-        if a_tag and a_tag.get("href"):
-            href = a_tag["href"]
-            if href.startswith("/"):
-                link = f"{COOLPAPER_URL}{href}"
-            elif href.startswith("http"):
-                link = href
+        title = title_link.get_text(strip=True)
+        href = title_link.get("href", "")
+        link = f"{COOLPAPER_URL}{href}" if href.startswith("/") else href
 
-        # Extract ArXiv ID from URL or text
+        # Extract ArXiv ID from the element's id attribute or link
         arxiv_id = None
-        match = ARXIV_PATTERN.search(link or title)
+        el_id = el.get("id", "")
+        match = ARXIV_PATTERN.search(el_id or href)
         if match:
             arxiv_id = match.group(1)
 
-        # Try to find score/stars
-        score = 0.0
-        for score_el in el.select(".stars, .score, .reading-count, .count"):
-            text = score_el.get_text(strip=True)
-            nums = re.findall(r'\d+', text)
-            if nums:
-                score = float(nums[0])
-                break
+        # Position in ranking as a proxy for score (higher rank = lower number)
+        index_el = el.select_one("span.index")
+        rank = 0
+        if index_el:
+            rank_text = index_el.get_text(strip=True).lstrip("#")
+            try:
+                rank = int(rank_text)
+            except ValueError:
+                pass
+        # Invert rank to score: #1 gets highest score
+        score = max(0.0, 100.0 - rank) if rank > 0 else 0.0
 
-        # Author
-        author = ""
-        author_el = el.select_one(".author, .authors")
-        if author_el:
-            author = author_el.get_text(strip=True)[:200]
-
-        # Summary
-        summary = ""
-        summary_el = el.select_one(".summary, .abstract, .description")
-        if summary_el:
-            summary = summary_el.get_text(strip=True)[:500]
-
+        # papers.cool doesn't show dates in HTML, the category page shows
+        # today's papers, so we use current time
         return ContentItem(
             source="coolpaper",
             source_type=SourceType.HTTP_SCRAPE,
             title=title,
             url=link,
-            author=author,
-            content=summary,
-            published_at=datetime.now(timezone.utc),  # papers.cool doesn't always show date
+            content="",
+            published_at=datetime.now(timezone.utc),
             score=score,
             arxiv_id=arxiv_id,
-            tags=["paper"],
+            tags=["paper", category],
         )
-
-    async def _try_api_endpoint(self, client: httpx.AsyncClient) -> list[ContentItem]:
-        """Try papers.cool API endpoint if HTML parsing fails."""
-        try:
-            async with client:
-                resp = await client.get(
-                    f"{COOLPAPER_URL}/api/papers",
-                    headers={"User-Agent": "daily-digest/0.1.0"},
-                )
-                if resp.status_code != 200:
-                    return []
-                data = resp.json()
-        except Exception:
-            return []
-
-        items = []
-        for paper in data if isinstance(data, list) else data.get("papers", []):
-            arxiv_id = None
-            paper_id = paper.get("id", "")
-            match = ARXIV_PATTERN.search(paper_id)
-            if match:
-                arxiv_id = match.group(1)
-
-            items.append(ContentItem(
-                source="coolpaper",
-                source_type=SourceType.HTTP_SCRAPE,
-                title=paper.get("title", ""),
-                url=f"{COOLPAPER_URL}/arxiv/{paper_id}" if paper_id else "",
-                author=paper.get("authors", ""),
-                content=paper.get("abstract", "")[:500],
-                published_at=datetime.now(timezone.utc),
-                score=float(paper.get("stars", 0)),
-                arxiv_id=arxiv_id,
-                tags=["paper"],
-            ))
-
-        return items

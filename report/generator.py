@@ -147,28 +147,67 @@ async def generate_digest_report(
     )
 
 
+def _load_openclaw_azure_config() -> dict[str, str]:
+    """Load Azure OpenAI config from OpenClaw models.json as fallback.
+
+    Returns dict with keys: base_url, model (empty string if not found).
+    """
+    import json
+    from pathlib import Path
+
+    models_path = (
+        Path.home() / ".openclaw" / "agents" / "main" / "agent" / "models.json"
+    )
+    try:
+        data = json.loads(models_path.read_text(encoding="utf-8"))
+        provider = data.get("providers", {}).get("azure-openai-responses", {})
+        base_url = provider.get("baseUrl", "")
+        models = provider.get("models", [])
+        model_id = models[0]["id"] if models else ""
+        return {"base_url": base_url, "model": model_id}
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, IndexError):
+        return {"base_url": "", "model": ""}
+
+
 async def _call_llm(prompt: str, config: dict) -> str:
     """Call LLM for summary generation via Azure OpenAI Responses API.
 
     Uses Opus model via Azure OpenAI endpoint.
-    Falls back to placeholder if API is not configured.
+    Falls back to OpenClaw models.json config if env vars are missing.
+    Falls back to placeholder template if API is not configured.
     """
     import os
     import httpx
 
     api_key = os.environ.get("AZURE_OPENAI_API_KEY", "")
-    base_url = os.environ.get("AZURE_OPENAI_BASE_URL", "")
-    api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2025-03-01-preview")
+    base_url = (os.environ.get("AZURE_OPENAI_BASE_URL")
+                or os.environ.get("AZURE_OPENAI_ENDPOINT", ""))
+    api_version = (os.environ.get("AZURE_OPENAI_API_VERSION") or "2025-03-01-preview")
+
+    # Fallback: load from OpenClaw models.json
+    openclaw_cfg = _load_openclaw_azure_config() if not base_url else {}
+    if not base_url:
+        base_url = openclaw_cfg.get("base_url", "")
+        if base_url:
+            logger.info("Using base_url from OpenClaw models.json")
 
     if not api_key or not base_url:
         logger.warning("Azure OpenAI not configured. Using fallback template.")
         return _generate_fallback_report(prompt)
 
+    # Ensure base_url ends with /openai for Responses API
+    if not base_url.endswith("/openai"):
+        base_url = base_url.rstrip("/") + "/openai"
+
     # Use Responses API endpoint
     url = f"{base_url}/responses?api-version={api_version}"
 
-    # Model: use the configured model or default
-    model = os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME", "llab-gpt-5.2-codex")
+    # Model: prefer env var > OpenClaw config > hardcoded default
+    model = (os.environ.get("AZURE_OPENAI_DEPLOYMENT")
+             or os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME")
+             or os.environ.get("AZURE_OPENAI_SUMMARY_DEPLOYMENT")
+             or openclaw_cfg.get("model", "")
+             or "llab-gpt-5.2-codex")
 
     payload = {
         "model": model,

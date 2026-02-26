@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import Any, ClassVar
 
+from aggregator.ad_filter import AdFilter
 from schema import CollectorResult, ContentItem, SourceType
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,8 @@ class CollectorRegistry:
     def create_all(cls, config: dict[str, Any]) -> list[BaseCollector]:
         """Create instances for all enabled sources in config."""
         sources_config = config.get("sources", {})
+        ad_filter_cfg = config.get("ad_filter", {})
+        ad_filter = AdFilter(ad_filter_cfg) if ad_filter_cfg.get("enabled", False) else None
         instances = []
         for name, src_cfg in sources_config.items():
             if not src_cfg.get("enabled", True):
@@ -52,7 +55,13 @@ class CollectorRegistry:
             if collector_cls is None:
                 logger.warning("No collector registered for source: %s", name)
                 continue
-            instances.append(collector_cls(src_cfg))
+            try:
+                instances.append(collector_cls(src_cfg, ad_filter=ad_filter))
+            except TypeError:
+                # Older collectors without ad_filter parameter
+                instance = collector_cls(src_cfg)
+                instance._ad_filter = ad_filter
+                instances.append(instance)
         return instances
 
 
@@ -78,11 +87,12 @@ class BaseCollector(ABC):
         if cls.source_name:
             CollectorRegistry.register(cls)
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any], ad_filter: AdFilter | None = None) -> None:
         self.config = config
         self.score_threshold: float = config.get("score_threshold", 0)
         self.lookback_hours: int = config.get("lookback_hours", 24)
         self.max_items: int = config.get("max_items", 100)
+        self._ad_filter: AdFilter | None = ad_filter
 
     @property
     def cutoff_time(self) -> datetime:
@@ -113,6 +123,17 @@ class BaseCollector(ABC):
                 item for item in raw_items
                 if item.score >= self.score_threshold
             ]
+
+            # Apply ad filter (after score threshold, before max_items)
+            ad_blocked_count = 0
+            if self._ad_filter is not None:
+                filtered, blocked = self._ad_filter.filter(filtered)
+                ad_blocked_count = len(blocked)
+                if blocked:
+                    logger.info(
+                        "[%s] Blocked %d items as ads",
+                        self.source_name, ad_blocked_count,
+                    )
 
             # Apply max items limit (highest score first)
             filtered.sort(key=lambda x: x.score, reverse=True)

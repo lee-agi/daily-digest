@@ -60,9 +60,12 @@ class HuggingFacePapersCollector(BaseCollector):
         if match:
             arxiv_id = match.group(1)
 
-        # Parse date
+        # Parse date — use submittedOnDailyAt (when the paper appeared on
+        # HF daily papers) rather than publishedAt (ArXiv publication date),
+        # so the lookback window filter works correctly.
         published_at = datetime.now(timezone.utc)
-        pub_date = data.get("publishedAt") or paper.get("publishedAt")
+        daily_date = paper.get("submittedOnDailyAt") or data.get("submittedOnDailyAt")
+        pub_date = daily_date or data.get("publishedAt") or paper.get("publishedAt")
         if pub_date:
             try:
                 published_at = dateutil_parser.parse(pub_date)

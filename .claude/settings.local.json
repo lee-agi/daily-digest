@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/lee/.openclaw/daily-digest diff --cached --stat 2>/dev/null)",
+      "Bash(git -C /Users/lee/.openclaw/daily-digest add . && git -C /Users/lee/.openclaw/daily-digest status --short)"
+    ]
+  }
+}

@@ -1,6 +1,8 @@
 # Daily Digest - Multi-Source Daily Information Aggregator
 
-每日多源信息聚合系统，自动从 14 个平台采集内容，去重过滤后生成 LLM 摘要报告。
+每日多源信息聚合系统，自动从 18 个平台采集内容，去重过滤后生成 LLM 摘要报告。
+
+**当前版本**: v0.12.0 | **活跃源**: 15/18 | **典型产出**: ~360 items/run
 
 ## Quick Start
 
@@ -14,7 +16,7 @@ uv pip install -r <(python -c "import tomllib; d=tomllib.load(open('pyproject.to
 cp .env.example .env
 # 编辑 .env 填入 API keys
 
-# 3. 启动 RSSHub (可选，知乎/即刻/小宇宙需要)
+# 3. 启动 RSSHub (可选，即刻/小宇宙/宝玉博客需要)
 docker-compose -f docker/docker-compose.yml up -d
 
 # 4. 运行
@@ -31,7 +33,7 @@ python orchestrator.py --collect-only --source huggingface  # 单源测试
 | GitHub | REST API | GITHUB_TOKEN (optional) |
 | Reddit | OAuth2/Public API | REDDIT_CLIENT_ID/SECRET (optional) |
 | YouTube | Native RSS | None |
-| 知乎 | RSSHub | ZHIHU_COOKIES → RSSHub |
+| 知乎 | Direct API (hot/recommend/follow) | zhihu-cli cookies |
 | 即刻 | RSSHub | JIKE_COOKIES → RSSHub |
 | 小宇宙 | RSSHub | None |
 | HuggingFace | HTTP API | None |
@@ -41,6 +43,10 @@ python orchestrator.py --collect-only --source huggingface  # 单源测试
 | Anthropic Blog | HTTP Scrape | None |
 | OpenAI Blog | Native RSS | None |
 | Google Blog | Native RSS | None |
+| CCF Best Paper | OpenReview API + YAML | None |
+| 机器之心/量子位/AI洞察日报 | RSS (GitHub/CloudFlare) | None |
+| 宝玉博客 | RSSHub /baoyu/blog | RSSHub |
+| Product Hunt | GraphQL API (top 10/day) | PRODUCTHUNT_API_TOKEN |
 
 ## Adding New Sources
 
@@ -91,7 +97,14 @@ All thresholds in `config.yaml` are per-source configurable:
 ```bash
 cp launchd/com.openclaw.digest-collect.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.openclaw.digest-collect.plist
+launchctl list | grep digest  # 验证
 ```
+
+Wrapper scripts (`scripts/run-collect.sh`, `scripts/run-summarize.sh`) handle environment variable loading for launchd.
 
 ### OpenClaw cron (LLM summary at 07:00)
 Configured via `~/.openclaw/cron/jobs.json`.
+
+## Known Issues
+- **Reddit**: OAuth app registration blocked by Responsible Builder Policy; using public API (13 items/run)
+- **Proxy**: httpx 0.28 + `httpx[socks]` ignores `proxy=None` for localhost; RSSHub collector uses `AsyncHTTPTransport()` to bypass

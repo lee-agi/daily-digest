@@ -1,0 +1,173 @@
+# Daily Digest Decision Log
+
+## 2026-02-23: End-to-End Verification & Production Deployment (v0.3.0)
+
+### Decision 1: Podcast feeds → apple_podcast instead of xiaoyuzhou RSSHub
+- **Decision**: Put all OPML podcast feeds (including xiaoyuzhou feeds) into `apple_podcast.feeds[]` config
+- **Why**: OPML file contains direct RSS feed URLs (feed.xyzfm.space, fireside.fm, etc.) that work without RSSHub; using `apple_podcast` collector with direct URLs is simpler and more reliable than routing through RSSHub
+- **Alternatives**: (1) Extract podcast_ids from feed URLs and use `xiaoyuzhou` collector via RSSHub — adds unnecessary dependency; (2) Create separate collector per feed source — over-engineering
+- **Consequences**: `xiaoyuzhou` and `jike` sources disabled; all podcast content flows through `apple_podcast`
+
+### Decision 2: HuggingFace date field fix — use submittedOnDailyAt
+- **Decision**: Use `paper.submittedOnDailyAt` instead of top-level `publishedAt` for cutoff filtering
+- **Why**: `publishedAt` is the ArXiv publication date (can be weeks old); `submittedOnDailyAt` is when the paper appeared on HF daily papers (today's date), which is what we actually want for the 24h lookback window
+- **Alternatives**: (1) Increase lookback_hours to 168 — would pull in irrelevant old papers; (2) Ignore date filtering entirely — defeats the purpose
+- **Consequences**: HuggingFace now correctly collects today's daily papers; test added in tests/test_huggingface.py
+
+### Decision 3: coolpaper collector rewrite — scrape category pages
+- **Decision**: Rewrite coolpaper collector to scrape `/arxiv/cs.AI`, `/arxiv/cs.CL`, `/arxiv/cs.LG` category pages instead of homepage
+- **Why**: Homepage is a category index, not a paper list; `/api/papers` returns 500; category pages have structured `div.paper` elements with `a.title-link` and ArXiv IDs
+- **Alternatives**: (1) Disable coolpaper entirely — loses valuable data source; (2) Use papers.cool RSS if available — no RSS endpoint found
+- **Consequences**: Collects ~65 papers per run (20 after threshold); ranking position used as score proxy (reading stars loaded via JS, not available in HTML)
+
+### Decision 4: RSSHub collector proxy bypass
+- **Decision**: Add `proxy=None` to RSSHub collector's httpx client
+- **Why**: System `http_proxy` env var causes httpx to route localhost:1200 requests through the proxy, which fails with 502
+- **Alternatives**: (1) Unset http_proxy globally — affects other collectors that need proxy for GFW bypass; (2) Set NO_PROXY env var — fragile across environments
+- **Consequences**: RSSHub requests go direct to localhost; other collectors still use system proxy
+
+### Decision 5: Azure OpenAI env var compatibility
+- **Decision**: Support both `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_BASE_URL`, prefer `AZURE_OPENAI_DEPLOYMENT` over `AZURE_OPENAI_SUMMARY_DEPLOYMENT`
+- **Why**: User's ~/.bashrc has `AZURE_OPENAI_ENDPOINT` (not `BASE_URL`) and `AZURE_OPENAI_DEPLOYMENT=llab-gpt-5` (non-reasoning model) which is better for long digest prompts than the pro reasoning model
+- **Alternatives**: (1) Force user to rename env vars — fragile; (2) Only support one naming convention — breaks cross-tool compatibility
+- **Consequences**: Works with both openclaw and daily-digest env var conventions; auto-appends `/openai` to endpoint if missing
+
+### Decision 6: Disable stub sources (x_twitter, weread)
+- **Decision**: Set `enabled: false` for x_twitter and weread in config.yaml
+- **Why**: Both require browser relay (CDP) infrastructure that isn't available; `_fetch_list()` returns `[]` anyway
+- **Alternatives**: (1) Leave enabled and let them silently return empty — confusing in logs; (2) Remove from config entirely — harder to re-enable later
+- **Consequences**: Cleaner logs; X data continues to be handled by existing separate cron job
+
+### Decision 7: Wrapper scripts for launchd
+- **Decision**: Create `scripts/run-collect.sh` wrapper that sources .env + bashrc before calling orchestrator
+- **Why**: launchd does not inherit shell environment variables; without wrapper, all API keys and Azure vars would be empty at runtime
+- **Alternatives**: (1) Put all env vars in plist EnvironmentVariables section — exposes secrets in plist file, harder to maintain; (2) Use launchd.conf — deprecated on modern macOS
+- **Consequences**: plist calls wrapper script instead of Python directly; wrapper handles all env setup
+
+## 2026-02-23: AAAI/CVPR/ACL Best Paper Scraping (v0.5.0)
+
+### Decision 8: IJCAI remains stub — no reliable best paper page
+- **Decision**: Keep IJCAI as stub (return empty list + warning), implement AAAI/CVPR/ACL only
+- **Why**: IJCAI awards page only has researcher lifetime achievement awards; conference domains (e.g. ijcai24.org) are unstable; proceedings don't mark distinguished papers
+- **Alternatives**: (1) Scrape IJCAI proceedings site — no best paper markers; (2) Hardcode known IJCAI best papers — not scalable
+- **Consequences**: 3 of 4 non-OpenReview conferences now have real scrapers; IJCAI papers can be added manually or when a stable source emerges
+
+### Decision 9: AAAI single-page vs per-year scraping
+- **Decision**: Scrape AAAI's single awards page (all years on one page) and filter by target year
+- **Why**: AAAI has one stable URL with all years; no per-year URL pattern exists. H3=year, H4=category, p/strong=title structure is well-defined
+- **Alternatives**: (1) Scrape AAAI proceedings — much more complex, no award markers; (2) Use DBLP — doesn't distinguish best papers from regular papers
+- **Consequences**: Works for all AAAI years on the page; handles two HTML patterns (strong+br+author vs separate p elements)
+
+### Decision 10: Graceful 404 handling for future conference years
+- **Decision**: Return empty list with info-level log for 404 responses (CVPR/ACL)
+- **Why**: When collecting for the latest year from ccf-deadlines YAML, the conference may not have happened yet (e.g. CVPR 2026 page doesn't exist)
+- **Alternatives**: (1) Let 404 raise exception — caught by collect() try/except but generates noisy ERROR logs; (2) Pre-check if page exists — unnecessary extra request
+- **Consequences**: Clean logs during normal operation; no false error alerts for expected missing pages
+
+## 2026-02-23: 后续事项修复 (v0.6.0)
+
+### Decision 11: RSSHub proxy bypass — AsyncHTTPTransport 替代 proxy=None
+- **Decision**: 用 `httpx.AsyncHTTPTransport()` 作为显式 transport 替代 `proxy=None`
+- **Why**: httpx 0.28.1 + `httpx[socks]` 扩展下，`proxy=None` 不能阻止 socks 代理环境变量的影响（堆栈走 `httpcore._async.socks_proxy`）；`AsyncHTTPTransport()` 创建纯 HTTP 连接，完全绕过代理
+- **Alternatives**: (1) 保持 `proxy=None` — 实测 502，无效; (2) 在 collector 中 `os.environ.pop('http_proxy')` — 全局副作用影响其他 collector
+- **Consequences**: 知乎热榜恢复采集（3-4 items/run）；所有 RSSHub 子类自动受益
+
+### Decision 12: 知乎 score_threshold 降为 0
+- **Decision**: 将 zhihu 的 `score_threshold` 从 100 降为 0
+- **Why**: RSSHub `/zhihu/hot` 路由不暴露投票数（feed 条目无 voteup 字段），所有条目 score=0，threshold=100 会过滤掉全部内容
+- **Alternatives**: (1) 解析 description 中的热度值 — RSSHub 知乎热榜 description 无热度数值; (2) 保持 100 — 永远 0 items
+- **Consequences**: 所有知乎热榜条目直接入选，依赖 max_items=20 限制数量
+
+### Decision 13: YouTube 失效频道清理
+- **Decision**: 移除 3 个返回 404 的 YouTube channel ID (UCD9mYRvKcwIl1nvx6XfraoA, UCRPn7_SStJ-cufr5ihmso7g, UClUHOZDBVPI2RdY0Q2JXhLw)
+- **Why**: 批量检测 45 个频道，3 个返回 404 (Wong Snooker Coach, 象棋徐教头, 世界趣闻)，频道已私有或删除
+- **Alternatives**: (1) 保留并让 collector 静默忽略 — 产生无用的 ERROR 日志; (2) 搜索替代频道 — 不确定是否有对应新频道
+- **Consequences**: 42 个活跃频道，采集零 ERROR
+
+### Decision 14: Reddit API 凭证 — 保持公开 API
+- **Decision**: 暂不配置 Reddit OAuth，继续使用公开 JSON API
+- **Why**: Reddit 要求同意 Responsible Builder Policy 才能创建 app，old.reddit.com 和新版均无法完成注册；公开 API 已能采集 13 条/次
+- **Alternatives**: (1) 等待 Reddit 修复注册流程后重试; (2) 使用第三方 Reddit RSS 服务
+- **Consequences**: Rate limit 较低 (10 req/min vs OAuth 60 req/min)，但每天一次采集完全够用
+
+### Decision 15: RSS Worker link 字段修复
+- **Decision**: 推送时 `link` 字段从空字符串改为 `{rss_worker_url}/feed#digest-{date}`
+- **Why**: 空 link 导致 RSS Worker fallback 到根 URL，所有条目共享同一 `<link>`；NetNewsWire 等 RSS reader 可能因此去重或不刷新
+- **Alternatives**: (1) 保持空 link — RSS reader 行为不一致; (2) 用外部 URL — 没有对应的 web 页面
+- **Consequences**: 每个 digest 有唯一 link 标识，RSS reader 正确展示新条目
+
+### Decision 16: base.py create_all ad_filter 兼容性
+- **Decision**: 在 `CollectorRegistry.create_all` 中用 try/except 处理不接受 `ad_filter` 参数的旧 collector
+- **Why**: base.py 新增了 `ad_filter` 参数传递，但多个子类 `__init__` 只接受 `config`，导致 TypeError
+- **Alternatives**: (1) 修改所有子类 __init__ 添加 **kwargs — 改动面广; (2) 只在 BaseCollector.__init__ 设置 — 子类 super().__init__ 调用已传递
+- **Consequences**: 新旧 collector 都能正常实例化；ad_filter 通过 fallback 路径注入
+
+## 2026-02-23: Ad Content Detection and Filtering (v0.6.0)
+
+### Decision 11: Rule-based ad filter (not LLM-based)
+- **Decision**: Implement a three-layer rule-based ad filter (keywords + URL blocklist + per-source rules) in `aggregator/ad_filter.py`
+- **Why**: Rule-based approach is deterministic, fast (no API calls), configurable, and sufficient for the identified ad patterns (Reddit soft ads, YouTube #ad tags, affiliate links). LLM-based classification would add latency, cost, and non-determinism for a problem that has clear pattern-based signals
+- **Alternatives**: (1) LLM-based ad classification — high cost/latency per item, overkill for pattern-based ads; (2) No filtering — leaves ad content in digests, reducing signal-to-noise ratio
+- **Consequences**: Zero additional API costs; easy to extend with new keywords/rules; may miss sophisticated native ads (acceptable trade-off given the source mix)
+
+### Decision 12: Integration point — BaseCollector.run() not aggregator pipeline
+- **Decision**: Integrate ad filter into `BaseCollector.run()` between score filtering and max_items truncation, with shared AdFilter instance created by `CollectorRegistry.create_all()`
+- **Why**: Per-source filtering needs access to source-specific metadata (e.g. Reddit upvote_ratio in `extra`); placing it in the collector pipeline allows source-aware rules while keeping a single shared config
+- **Alternatives**: (1) Aggregator-level filter after all collectors finish — loses per-source context ordering; (2) Per-collector override of `run()` — code duplication across collectors
+- **Consequences**: All collectors automatically get ad filtering; blocked items are logged per-source; AdFilter instance is shared across all collectors for consistent behavior
+
+## 2026-02-23: Reviewer Rating Quality Filter (v0.8.0)
+
+### Decision 17: OpenReview `details=replies` + collector-level rating filter
+- **Decision**: Use `details=replies` API param to batch-fetch reviewer ratings alongside notes; filter by per-conference `min_avg_rating` threshold inside `_fetch_openreview_orals()`
+- **Why**: ICLR 2026 has 223 Oral papers, too many for a daily digest. Reviewer average ratings provide a quality signal. `details=replies` avoids N+1 API calls (one per paper). Filtering at collector level (before `run()` dedup/max_items) ensures only high-quality papers enter the pipeline
+- **Alternatives**: (1) Separate API call per paper for reviews — O(N) requests, rate-limit issues; (2) Filter at aggregator layer — loses per-conference threshold context; (3) Fixed top-K by count — ignores quality signal
+- **Consequences**: ICLR 2026 reduced from ~223 to ~80-100 papers; page size reduced from 200 to 25 (replies inflate response); 0.5s sleep between pages for rate-limiting; papers without public reviews pass through (not penalized)
+
+### Decision 18: OpenReview API v2 `invitations` (plural list) compatibility
+- **Decision**: Check both `reply.invitations` (list, API v2) and `reply.invitation` (string, API v1) when identifying Official_Review entries
+- **Why**: OpenReview API v2 returns `invitations` as a list (e.g. `["ICLR.cc/2026/Conference/Submission1/-/Official_Review", "ICLR.cc/2026/Conference/-/Edit"]`) while older API documentation references singular `invitation`. The plan's initial implementation only checked `invitation`, causing 0% rating extraction until fixed
+- **Alternatives**: (1) Only support v2 format — breaks if API changes or older conference data uses v1; (2) Use `content` keys heuristic instead — less reliable
+- **Consequences**: Rating extraction works for both API versions; unit tests cover both formats
+
+## 2026-02-23: Add 4 New Data Sources (v0.9.0)
+
+### Decision 19: cn_tech_blog — single multi-feed collector for 3 RSS sources
+- **Decision**: Create `collectors/cn_tech_blog.py` as a multi-feed RSS collector for 机器之心、量子位、AI洞察日报
+- **Why**: All 3 sources are standard RSS 2.0 feeds requiring no auth; using the same `google_blog.py` pattern (configurable `feeds[]` list + cross-feed URL dedup) avoids code duplication while keeping them logically grouped as Chinese tech blog sources
+- **Alternatives**: (1) Add feeds to existing `google_blog` collector — mixes English/Chinese sources, confusing in logs/reports; (2) Create 3 separate collector classes — over-engineering for identical RSS patterns
+- **Consequences**: Single `cn_tech_blog` source in config with 3 feeds; 30 items/run; cross-feed dedup prevents duplicates
+
+### Decision 20: baoyu_blog — RSSHub subclass with minimal config
+- **Decision**: Add `BaoyuBlogCollector` as a 3-line subclass of `RSSHubCollector` in `rsshub_collector.py`
+- **Why**: The `rsshub://baoyu/blog` route follows the exact same pattern as ZhihuCollector; RSSHubCollector already handles transport bypass, feed parsing, and date filtering. Only `source_name` override is needed
+- **Alternatives**: (1) Create standalone collector file — duplicates RSSHub transport/parsing logic; (2) Add as config-only generic RSSHub source — would need dynamic class generation, more complex
+- **Consequences**: 8 items/run; inherits RSSHub proxy bypass automatically; 140 tests passing
+
+## 2026-02-24: Fix xiaoyuzhou/apple_podcast Config Mismatch (v0.11.0)
+
+### Decision 21: XiaoyuzhouCollector 改为直接 RSS (BaseCollector) 而非 RSSHub 路由
+- **Decision**: 将 `XiaoyuzhouCollector` 从 `RSSHubCollector` 子类（读 `podcast_ids` 拼接 RSSHub URL）重构为 `BaseCollector` 子类（直接读 `feeds[]` RSS URL 列表），并将 13 个 xyzfm.space feeds 从 `apple_podcast.feeds` 移至 `xiaoyuzhou.feeds`
+- **Why**: 根因是 v0.3.0 时将小宇宙 feeds（外部 xyzfm.space RSS）混入了 `apple_podcast`，`xiaoyuzhou` 被留空禁用。xyzfm.space 是外部服务（需系统代理），不应走 RSSHub localhost 路由；`ApplePodcastCollector` 已有完整直连 RSS 逻辑可复用；分离后 `apple_podcast` 只管非小宇宙的 5 个播客，职责清晰
+- **Alternatives**: (1) 继续混在 `apple_podcast` — 语义混乱，source 标签在报告中无法区分播客来源; (2) 沿用 RSSHub `/xiaoyuzhou/podcast/{id}` 路由 — 需要 RSSHub 运行且支持该路由，xyzfm.space 直连更可靠
+- **Consequences**: `xiaoyuzhou` 恢复 enabled=true，13 个播客独立采集；`apple_podcast` 缩至 5 个 feeds；lookback_hours 统一为 168h（播客更新频率低）；无 RSSHub 依赖
+
+### Decision 22: `api-version` 空字符串 fallback 修复
+- **Decision**: 将 `generator.py` 中 `api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2025-03-01-preview")` 改为 `(os.environ.get("AZURE_OPENAI_API_VERSION") or "2025-03-01-preview")`
+- **Why**: `os.environ.get(key, default)` 在 key 存在但值为 `""` 时返回空字符串（不走 default），导致 Responses API URL `?api-version=` 为空，Azure 返回 404。`or` 操作符对空字符串同样走 fallback
+- **Alternatives**: (1) 让用户修正 `~/.bashrc` 中的 env var — 依赖外部环境，fragile; (2) 在启动时校验并报错 — 不够 graceful
+- **Consequences**: 环境变量不存在或为空时均使用 `2025-03-01-preview`；e2e 测试验证 LLM 调用 HTTP 200 OK
+
+## 2026-02-26: Product Hunt 数据源 (v0.12.0)
+
+### Decision 23: Product Hunt 采集方式 — 官方 GraphQL API
+- **Decision**: 使用官方 GraphQL API (`https://api.producthunt.com/v2/api/graphql`)，Bearer Token 认证，`PRODUCTHUNT_API_TOKEN` 环境变量
+- **Why**: 官方 API 数据最准确且稳定；GraphQL 可精确指定返回字段（name/tagline/votesCount/topics等），无需解析额外数据；不依赖第三方 RSSHub 或 HTTP 抓取，降低维护成本
+- **Alternatives**: (1) RSS 抓取 producthunt.com/feed — 数据字段有限，无 votes 数量，无法按 score 排序; (2) HTTP 抓取 PH 网页 — 脆弱，易受反爬限制，需维护 CSS 选择器
+- **Consequences**: 需要用户配置 `PRODUCTHUNT_API_TOKEN`（Bearer Token，PH Developer Portal 申请）；token 失效时 collect() 返回 []（已有日志告警）
+
+### Decision 24: Product Hunt 时间边界 — Pacific Time 自然日
+- **Decision**: 用 `America/Los_Angeles` 时区计算当天 00:00 ～ 次日 00:00 的 ISO8601 边界，传入 GraphQL `postedAfter`/`postedBefore`
+- **Why**: Product Hunt 以 PST/PDT 自然日为产品发布日（每日排行榜按 PT 时区重置），使用 UTC 边界会导致截断当天部分产品或混入前一天产品
+- **Alternatives**: (1) 使用 UTC 当天边界 — 偏差约 8 小时，导致每天 0-8 点 UTC 抓到 PH 前一天末尾内容; (2) lookback_hours=24 滚动窗口 — 不与 PH 日历边界对齐，可能重复或遗漏
+- **Consequences**: `lookback_hours` 配置项保留（作为占位，不影响实际查询逻辑）；夏令时自动由 `zoneinfo` 处理

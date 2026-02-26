@@ -7,9 +7,8 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/lee/.openclaw/daily-digest/.venv/bin/python</string>
-        <string>/Users/lee/.openclaw/daily-digest/orchestrator.py</string>
-        <string>--collect-only</string>
+        <string>/bin/bash</string>
+        <string>/Users/lee/.openclaw/daily-digest/scripts/run-collect.sh</string>
     </array>
 
     <key>StartCalendarInterval</key>

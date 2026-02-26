@@ -28,6 +28,10 @@ import collectors.apple_podcast  # noqa: F401
 import collectors.anthropic_blog  # noqa: F401
 import collectors.openai_blog  # noqa: F401
 import collectors.google_blog  # noqa: F401
+import collectors.ccf_bestpaper  # noqa: F401
+import collectors.zhihu_collector  # noqa: F401
+import collectors.cn_tech_blog  # noqa: F401
+import collectors.producthunt_collector  # noqa: F401
 
 from collectors.base import CollectorRegistry
 
@@ -42,6 +46,8 @@ class TestCollectorRegistration:
             "huggingface", "coolpaper",
             "x_twitter", "weread", "apple_podcast",
             "anthropic", "openai", "google_blog",
+            "ccf_bestpaper", "cn_tech_blog", "baoyu_blog",
+            "producthunt",
         }
         registered = set(CollectorRegistry.all_names())
         assert expected.issubset(registered), f"Missing: {expected - registered}"
@@ -60,10 +66,11 @@ class TestCollectorRegistration:
                 "weread": {"enabled": False},
                 "apple_podcast": {"enabled": True, "feeds": []},
                 "jike": {"enabled": True, "rsshub_base": "http://localhost:1200", "user_ids": []},
-                "xiaoyuzhou": {"enabled": True, "rsshub_base": "http://localhost:1200", "podcast_ids": []},
+                "xiaoyuzhou": {"enabled": True, "feeds": []},
                 "anthropic": {"enabled": True, "score_threshold": 0},
                 "openai": {"enabled": True, "score_threshold": 0},
                 "google_blog": {"enabled": True, "score_threshold": 0, "feeds": []},
+                "ccf_bestpaper": {"enabled": True, "score_threshold": 0},
             }
         }
         instances = CollectorRegistry.create_all(config)
@@ -149,3 +156,59 @@ class TestRedditCollector:
         if items:
             assert items[0].source == "reddit"
             assert "LocalLLaMA" in items[0].tags
+
+
+class TestXiaoyuzhouCollector:
+    """Test XiaoyuzhouCollector (direct RSS via xyzfm.space)."""
+
+    def test_no_feeds_returns_empty_sync(self):
+        """Collector initialised with no feeds should store empty list."""
+        from collectors.rsshub_collector import XiaoyuzhouCollector
+        collector = XiaoyuzhouCollector({"feeds": []})
+        assert collector.feeds == []
+
+    def test_feeds_from_config(self):
+        """Feeds list should be read directly from config."""
+        from collectors.rsshub_collector import XiaoyuzhouCollector
+        feeds = [
+            "https://feed.xyzfm.space/qw7x9eum9utp",
+            "https://feed.xyzfm.space/tmaapfx9v3hl",
+        ]
+        collector = XiaoyuzhouCollector({"feeds": feeds})
+        assert collector.feeds == feeds
+
+    @pytest.mark.asyncio
+    async def test_no_feeds_returns_empty(self):
+        """collect() with empty feeds list returns []."""
+        from collectors.rsshub_collector import XiaoyuzhouCollector
+        collector = XiaoyuzhouCollector({
+            "feeds": [],
+            "score_threshold": 0,
+            "lookback_hours": 168,
+            "max_items": 20,
+        })
+        items = await collector.collect()
+        assert items == []
+
+    def test_parse_entry_podcast_tag(self):
+        """_parse_entry should tag item as 'podcast' and set source to 'xiaoyuzhou'."""
+        from collectors.rsshub_collector import XiaoyuzhouCollector
+        collector = XiaoyuzhouCollector({
+            "feeds": [],
+            "score_threshold": 0,
+            "lookback_hours": 168,
+        })
+        fake_entry = {
+            "title": "Episode 42",
+            "link": "https://www.xiaoyuzhoufm.com/episode/abc123",
+            "summary": "A great episode about AI",
+            "published": "Mon, 24 Feb 2026 10:00:00 +0000",
+            "itunes_duration": "45:30",
+        }
+        item = collector._parse_entry(fake_entry, "Test Podcast")
+        assert item is not None
+        assert item.source == "xiaoyuzhou"
+        assert "podcast" in item.tags
+        assert item.extra["podcast"] == "Test Podcast"
+        assert item.extra["duration"] == "45:30"
+        assert "[Test Podcast]" in item.title

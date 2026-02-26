@@ -93,7 +93,13 @@ class RSSHubCollector(BaseCollector):
         items = []
         urls = self._build_feed_urls()
 
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        # Use explicit transport to fully bypass system proxy env vars
+        # (http_proxy). httpx[socks] + proxy=None still routes through
+        # SOCKS proxy in httpx 0.28; AsyncHTTPTransport avoids this.
+        transport = httpx.AsyncHTTPTransport()
+        async with httpx.AsyncClient(
+            timeout=30, follow_redirects=True, transport=transport,
+        ) as client:
             for url in urls:
                 try:
                     resp = await client.get(url)
@@ -110,23 +116,6 @@ class RSSHubCollector(BaseCollector):
 
         return items
 
-
-class ZhihuCollector(RSSHubCollector):
-    """知乎热榜 via RSSHub /zhihu/hot."""
-    source_name = "zhihu"
-
-    def _parse_score(self, entry: dict) -> float:
-        # RSSHub zhihu hot includes heat score in description
-        # Try to extract numeric value from entry
-        summary = entry.get("summary", "")
-        # zhihu hot entries often contain vote counts
-        try:
-            for field in ("slash:comments", "slash:hit"):
-                if field in entry:
-                    return float(entry[field])
-        except (ValueError, TypeError):
-            pass
-        return 0.0
 
 
 class JikeCollector(RSSHubCollector):
@@ -145,14 +134,88 @@ class JikeCollector(RSSHubCollector):
         return 0.0  # Jike RSS doesn't expose like counts
 
 
-class XiaoyuzhouCollector(RSSHubCollector):
-    """小宇宙播客 via RSSHub /xiaoyuzhou/podcast/:id."""
-    source_name = "xiaoyuzhou"
+class XiaoyuzhouCollector(BaseCollector):
+    """小宇宙播客 via 直接 RSS feeds (xyzfm.space proxy).
 
-    def _build_feed_urls(self) -> list[str]:
-        podcast_ids = self.config.get("podcast_ids", [])
-        route_template = self.config.get("route", "/xiaoyuzhou/podcast/{podcast_id}")
-        return [
-            f"{self.rsshub_base}{route_template.format(podcast_id=pid)}"
-            for pid in podcast_ids
-        ] if podcast_ids else []
+    Reads `feeds` list from config — each entry is a full RSS URL.
+    Uses system proxy (unlike RSSHubCollector which bypasses it),
+    since xyzfm.space is an external service.
+    """
+    source_name = "xiaoyuzhou"
+    source_type = SourceType.RSS
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        super().__init__(config)
+        self.feeds = config.get("feeds", [])
+
+    async def collect(self) -> list[ContentItem]:
+        if not self.feeds:
+            logger.info("[xiaoyuzhou] No feeds configured")
+            return []
+
+        items = []
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            for feed_url in self.feeds:
+                try:
+                    resp = await client.get(feed_url)
+                    resp.raise_for_status()
+                    feed = feedparser.parse(resp.text)
+                except httpx.HTTPError as e:
+                    logger.error("[xiaoyuzhou] Failed to fetch %s: %s", feed_url, e)
+                    continue
+
+                podcast_title = feed.feed.get("title", "Unknown Podcast")
+
+                for entry in feed.entries:
+                    item = self._parse_entry(entry, podcast_title)
+                    if item and item.published_at >= self.cutoff_time:
+                        items.append(item)
+
+        return items
+
+    def _parse_entry(self, entry: dict, podcast_title: str) -> ContentItem | None:
+        """Parse a podcast RSS entry."""
+        published = None
+        for date_field in ("published_parsed", "updated_parsed"):
+            parsed_time = entry.get(date_field)
+            if parsed_time:
+                try:
+                    published = datetime(*parsed_time[:6], tzinfo=timezone.utc)
+                except (TypeError, ValueError):
+                    pass
+                break
+
+        if published is None:
+            for date_str_field in ("published", "updated"):
+                date_str = entry.get(date_str_field, "")
+                if date_str:
+                    try:
+                        published = dateutil_parser.parse(date_str)
+                        if published.tzinfo is None:
+                            published = published.replace(tzinfo=timezone.utc)
+                    except (ValueError, TypeError):
+                        pass
+                    break
+
+        if published is None:
+            published = datetime.now(timezone.utc)
+
+        duration = entry.get("itunes_duration", "")
+
+        return ContentItem(
+            source="xiaoyuzhou",
+            source_type=SourceType.RSS,
+            title=f"[{podcast_title}] {entry.get('title', 'Untitled')}",
+            url=entry.get("link", ""),
+            author=podcast_title,
+            content=entry.get("summary", "")[:500],
+            published_at=published,
+            score=0.0,
+            tags=["podcast"],
+            extra={"podcast": podcast_title, "duration": duration},
+        )
+
+
+class BaoyuBlogCollector(RSSHubCollector):
+    """宝玉博客 via RSSHub /baoyu/blog."""
+    source_name = "baoyu_blog"

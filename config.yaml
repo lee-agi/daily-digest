@@ -15,7 +15,7 @@ sources:
     source_type: browser_relay
     score_threshold: 0         # No threshold for X lists (curated already)
     lookback_hours: 24
-    max_items: 50
+    max_items: 100
     lists:
       LLM: "1664234382868250624"
       Product: "1934043689183256997"
@@ -24,7 +24,7 @@ sources:
   github:
     enabled: true
     source_type: api
-    score_threshold: 5         # Minimum stars on release/PR
+    score_threshold: 50         # Minimum stars on release/PR
     lookback_hours: 24
     max_items: 30
     # repos: auto-detected from GitHub stars/following
@@ -33,13 +33,18 @@ sources:
   reddit:
     enabled: true
     source_type: api
-    score_threshold: 50        # Minimum upvotes
+    score_threshold: 30        # Minimum upvotes
     lookback_hours: 24
-    max_items: 30
+    max_items: 100
     subreddits:
       - LocalLLaMA
       - MachineLearning
       - artificial
+      - reinforcementlearning
+      - books
+      - OpenAI
+      - productivity
+      - programming
     # client_id/secret: from env REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET
 
   youtube:
@@ -47,24 +52,53 @@ sources:
     source_type: rss
     score_threshold: 0         # RSS has no score, rely on subscriptions
     lookback_hours: 24
-    max_items: 20
-    channels: []               # Fill in YouTube channel IDs
+    max_items: 30
+    channels:
+      - UC-yRDvpR99LUc5l7i7jLzew   # Bg2 Pod
+      - UC2ggjtuuWvxrHHHiaDH1dlQ   # Hung-yi Lee
+      - UC2ohDbbkpfngjaeV7TBHRcg   # Core Memory Podcast
+      - UC5WjFrtBdufl6CZojX3D8dQ   # Tesla
+      - UC8WCW6C3BWLKSZ5cMzD8Gyw   # 跟李沐学AI
+      - UC9cn0TuPq4dnbTY-CBsm8XA   # a16z
+      - UCC-lyoTfSrcJzA1ab3APAgw   # LangChain
+      - UCEBb1b_L6zDS3xTUrIALZOw   # MIT OpenCourseWare
+      - UCFTZu3WRjMYI7euMZ5R9BbA   # 魏知超啥书都读
+      - UCKFB_rVEFEF3l-onQGvGx1A   # 一席YiXi
+      - UCKV2yWPB3wn0RTZh3cTD8YA   # 硅谷101
+      - UCLKPca3kwwd-B59HNr-_lvA   # AI Engineer
+      - UCP7jMXSY2xbc3KCAE0MHQ-A   # Google DeepMind
+      - UCQID78IY6EOojr5RUdD47MQ   # MAD Podcast Matt Turck
+      - UCSs4A6HYKmHA2MG_0z-F0xw   # 彭导分享
+      - UCUl-s_Vp-Kkk_XVyDylNwLA   # Unsupervised Learning
+      - UCWrF0oN6unbXrWsTN7RctTw   # Sequoia Capital
+      - UCXUPKJO5MZQN11PqgIvyuvQ   # Andrej Karpathy
+      - UCXZCJLdBC09xxGZ6gcdrc6A   # OpenAI
+      - UCXl4i9dYBrFOabk0xGmbkRA   # Dwarkesh Patel
+      - UCcIXc5mJsHVYTZR1maL5l9w   # DeepLearningAI
+      - UCcefcZRL2oaA_uBNeo5UOWg   # Y Combinator
+      - UCh4QrR5V6reIojGpRqkTbYw   # 一口新飯
+      - UCrDwWp7EBBv4NwvScIpBDOA   # Anthropic
+      - UCxBcwypKK-W3GHd_RZ9FZrQ   # Latent Space
+      - UCye1YedIypHffYb8k6Gp9wg   # Alex Kantrowitz
 
   zhihu:
     enabled: true
-    source_type: rss
-    score_threshold: 100       # Minimum voteup
+    source_type: api
+    score_threshold: 50        # Based on voteup_count, keep items with >= 50 votes
     lookback_hours: 24
-    max_items: 20
-    rsshub_base: http://localhost:1200
-    route: /zhihu/hot
+    max_items: 50              # Combined limit across all feed types
+    feed_types:
+      - hot
+      - recommend
+      - follow
+    limit_per_feed: 20         # Top N per feed type, sorted by score
 
   jike:
     enabled: true
     source_type: rss
     score_threshold: 50        # Minimum likes
     lookback_hours: 24
-    max_items: 20
+    max_items: 30
     rsshub_base: http://localhost:1200
     route: /jike/user/{user_id}
     user_ids: []               # Fill in Jike user IDs
@@ -73,18 +107,29 @@ sources:
     enabled: true
     source_type: rss
     score_threshold: 0
-    lookback_hours: 24
+    lookback_hours: 720        # 播客更新频率低，30天窗口
     max_items: 20
-    rsshub_base: http://localhost:1200
-    route: /xiaoyuzhou/podcast/{podcast_id}
-    podcast_ids: []            # Fill in podcast IDs
+    feeds:
+      - https://feed.xyzfm.space/qw7x9eum9utp       # 搞钱女孩
+      - https://feed.xyzfm.space/tmaapfx9v3hl        # 信号与噪声
+      - https://feed.xyzfm.space/ym6ug8jctfp8        # 海外独角兽
+      - https://feed.xyzfm.space/834hyx3v9k74        # 屠龙之术
+      - https://feed.xyzfm.space/yxuruh3f9mc4        # 乱翻书
+      - https://feed.xyzfm.space/ypn9dydpbxpc        # 无人知晓
+      - https://feed.xyzfm.space/wupdmt9er7nb        # 脑放电波
+      - https://feed.xyzfm.space/evgg6xle9rdc        # 42章经
+      - https://feed.xyzfm.space/c9jh49u4lgeq        # AI增长黑客
+      - https://feed.xyzfm.space/xxg7ryklkkft        # OnBoard!
+      - https://feed.xyzfm.space/jbap8hlxmuev        # AI局内人
+      - https://feed.xyzfm.space/dk4yh3pkpjp3        # 张小珺商业访谈录
+      - https://feed.xyzfm.space/kf7lym7fc4e9        # 此话当真
 
   huggingface:
     enabled: true
     source_type: http_scrape
     score_threshold: 20        # Minimum daily likes
     lookback_hours: 24
-    max_items: 20
+    max_items: 30
 
   coolpaper:
     enabled: true
@@ -97,33 +142,69 @@ sources:
     enabled: true
     source_type: rss
     score_threshold: 0
-    lookback_hours: 24
+    lookback_hours: 720        # 播客更新频率较低，30天窗口
     max_items: 20
-    feeds: []                  # Fill in Apple Podcast RSS URLs
+    feeds:
+      - https://podcast.latepost.com/rss              # 晚点聊 LateTalk
+      - https://feeds.fireside.fm/guiguzaozhidao/rss  # What's Next 科技早知道
+      - https://lexfridman.com/feed/podcast/           # Lex Fridman Podcast
+      - https://www.ximalaya.com/album/74194808.xml   # AI炼金术
+      - https://feeds.fireside.fm/sv101/rss           # 硅谷101
 
   anthropic:
     enabled: true
     source_type: http_scrape
     score_threshold: 0
-    lookback_hours: 168        # 7天窗口（博客更新频率低）
-    max_items: 20
+    lookback_hours: 24 # 7天窗口（博客更新频率低）
+    max_items: 5
 
   openai:
     enabled: true
     source_type: rss
     score_threshold: 0
-    lookback_hours: 168
-    max_items: 20
+    lookback_hours: 24
+    max_items: 5
 
   google_blog:
     enabled: true
     source_type: rss
     score_threshold: 0
-    lookback_hours: 168
-    max_items: 20
+    lookback_hours: 24
+    max_items: 10
     feeds:
       - https://blog.google/innovation-and-ai/rss/
       - https://blog.google/technology/ai/rss/
+
+  ccf_bestpaper:
+    enabled: true
+    source_type: api
+    score_threshold: 0          # 保持 0，实际过滤由 min_avg_rating 控制
+    lookback_hours: 720         # 30天窗口（会议论文发布频率低）
+    max_items: 300              # oral 论文总量：NeurIPS~60 + ICML~100 + ICLR~213
+    min_avg_rating:             # Reviewer 平均评分阈值（按会议配置）
+      ICLR: 7                  # 1-10 scale, ~223→~80-100 papers
+      NeurIPS: 5               # ~1-5 scale
+      ICML: 5                  # ~1-5 scale
+
+  cn_tech_blog:
+    enabled: true
+    source_type: rss
+    score_threshold: 0
+    lookback_hours: 24 # 7天窗口（微信公众号更新频率不固定）
+    max_items: 30
+    feeds:
+      - https://raw.githubusercontent.com/osnsyc/Wechat-Scholar/main/channels/gh_dbc0a5474692.xml  # 机器之心
+      - https://raw.githubusercontent.com/osnsyc/Wechat-Scholar/main/channels/gh_114e76fd6e5d.xml  # 量子位
+      - https://justlovemaki.github.io/CloudFlare-AI-Insight-Daily/rss.xml                         # AI洞察日报
+
+  baoyu_blog:
+    enabled: true
+    source_type: rss
+    score_threshold: 0
+    lookback_hours: 24 # 7天窗口（博客更新频率低）
+    max_items: 10
+    rsshub_base: http://localhost:1200
+    route: /baoyu/blog
 
   weread:
     enabled: true
@@ -131,6 +212,27 @@ sources:
     score_threshold: 0
     lookback_hours: 24
     max_items: 10
+
+  producthunt:
+    enabled: true
+    source_type: api
+    score_threshold: 0    # Already ordered by votesCount desc; no secondary filter needed
+    lookback_hours: 24    # Placeholder — actual query uses PST day boundaries
+    max_items: 10         # Top 10 products of the day
+    # token: from env PRODUCTHUNT_API_TOKEN
+
+# Ad content filtering
+ad_filter:
+  enabled: true
+  title_keywords: []          # Extra global title keywords (appended to built-in list)
+  content_keywords: []        # Extra global content keywords
+  url_blocklist: []           # Extra URL patterns to block
+  per_source:
+    reddit:
+      title_keywords: []
+      min_upvote_ratio: 0.4   # Block posts with upvote_ratio below this
+    youtube:
+      title_keywords: ["#ad", "#sponsored"]
 
 # Summary configuration
 summary:
@@ -142,7 +244,7 @@ summary:
     - "Videos & Podcasts"
     - "Books & Reading"
     - "Social & Community"
-  top_headlines: 5
+  top_headlines: 10
 
 # Distribution
 distribution:

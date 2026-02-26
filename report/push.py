@@ -31,7 +31,7 @@ async def push_to_rss_worker(report: DigestReport, config: dict) -> bool:
         "category": "daily-digest",
         "source": "daily-digest",
         "tags": ["digest", report.date],
-        "link": "",
+        "link": f"{url}/feed#digest-{report.date}",
     }
 
     headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
