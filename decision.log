@@ -185,3 +185,17 @@
 - **Why**: 项目使用 uv 管理虚拟环境（`.venv`），依赖应声明在 `pyproject.toml` 中保持一致性；`--break-system-packages` 方式安装到系统 Python 不影响 `.venv`
 - **Alternatives**: (1) 在 `pyproject.toml` 中保持为 optional dependency — twikit 是降级路径，理论上可选，但实际要用到故作为必选更简单; (2) lazy import + 运行时安装提示 — 过度复杂
 - **Consequences**: twikit 2.3.3 安装（带 pyjsparser/webvtt-py 等依赖）；测试套件中 patch("twikit.Client") 可正常工作
+
+## 2026-02-26: LLM 摘要调用修复 (v0.13.1)
+
+### Decision 27: 模型名硬编码为 llab-gpt-5.2-codex
+- **Decision**: 移除 `AZURE_OPENAI_SUMMARY_DEPLOYMENT` / `AZURE_OPENAI_DEPLOYMENT` / `AZURE_OPENAI_DEPLOYMENT_NAME` 环境变量优先级链，直接硬编码 `model = "llab-gpt-5.2-codex"`
+- **Why**: `~/.secrets` 中 `AZURE_OPENAI_DEPLOYMENT` 设为 `llab-gpt-5-pro`，该模型虽在 Azure 上存在（HTTP 200），但处理 62861 字符 prompt 时 TTFT 超过 8 分钟且 0 delta tokens；`llab-gpt-5.2-codex` 是 models.json 中注册的已验证可用模型，e2e 测试 TTFT ~150s 且成功生成 10100 字符摘要
+- **Alternatives**: (A, 已选) 硬编码模型; (B) 缩减 prompt 大小 — 不解决模型选错的根因; (C) A+B 组合 — prompt 目前能跑通，暂不需要缩减
+- **Consequences**: 切换模型需修改代码而非环境变量，但确保不会因 env var 污染再次选错模型
+
+### Decision 28: Read timeout 从 600s 改为 120s
+- **Decision**: `httpx.Timeout(read=120.0)` 替代原来的 `read=600.0`
+- **Why**: TTFT 120s 对 Codex 处理 62k 字符 prompt 足够（实测 ~150s 内完成全部流式传输）；原来的 600s 导致失败时要等 10 分钟才 fallback；30s 实测不够（Codex TTFT > 30s）
+- **Alternatives**: (1) 30s — 实测 3 次全部 ReadTimeout; (2) 600s — 浪费重试时间; (3) 120s — 平衡 TTFT 容忍度和快速失败
+- **Consequences**: 最坏情况 3 次重试总耗时 ~6 分钟（3×120s + sleep），比之前 ~30 分钟大幅缩短

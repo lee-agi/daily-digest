@@ -7,6 +7,7 @@ Summary prompt style references:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -170,9 +171,11 @@ def _load_openclaw_azure_config() -> dict[str, str]:
 
 
 async def _call_llm(prompt: str, config: dict) -> str:
-    """Call LLM for summary generation via Azure OpenAI Responses API.
+    """Call LLM for summary generation via Azure OpenAI Responses API (streaming).
 
-    Uses Opus model via Azure OpenAI endpoint.
+    Uses streaming mode to keep the connection alive during long inference,
+    preventing proxy/load-balancer idle-timeout disconnects.
+
     Falls back to OpenClaw models.json config if env vars are missing.
     Falls back to placeholder template if API is not configured.
     """
@@ -184,8 +187,8 @@ async def _call_llm(prompt: str, config: dict) -> str:
                 or os.environ.get("AZURE_OPENAI_ENDPOINT", ""))
     api_version = (os.environ.get("AZURE_OPENAI_API_VERSION") or "2025-03-01-preview")
 
-    # Fallback: load from OpenClaw models.json
-    openclaw_cfg = _load_openclaw_azure_config() if not base_url else {}
+    # Always load OpenClaw config for model selection; base_url env var takes priority
+    openclaw_cfg = _load_openclaw_azure_config()
     if not base_url:
         base_url = openclaw_cfg.get("base_url", "")
         if base_url:
@@ -202,45 +205,34 @@ async def _call_llm(prompt: str, config: dict) -> str:
     # Use Responses API endpoint
     url = f"{base_url}/responses?api-version={api_version}"
 
-    # Model: prefer env var > OpenClaw config > hardcoded default
-    model = (os.environ.get("AZURE_OPENAI_DEPLOYMENT")
-             or os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME")
-             or os.environ.get("AZURE_OPENAI_SUMMARY_DEPLOYMENT")
-             or openclaw_cfg.get("model", "")
-             or "llab-gpt-5.2-codex")
+    # Hard-coded model — env vars proved unreliable (llab-gpt-5-pro mismatch)
+    model = "llab-gpt-5.2-codex"
 
     payload = {
         "model": model,
         "input": prompt,
         "max_output_tokens": 16000,
+        "stream": True,
     }
+    headers = {
+        "api-key": api_key,
+        "Content-Type": "application/json",
+    }
+    # 120s read timeout: TTFT limit for large prompts on Codex models
+    timeout = httpx.Timeout(connect=30.0, read=120.0, write=60.0, pool=30.0)
 
-    try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(
-                url,
-                json=payload,
-                headers={
-                    "api-key": api_key,
-                    "Content-Type": "application/json",
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+    logger.info(
+        "Calling LLM: model=%s, url=%s, prompt_chars=%d", model, url, len(prompt)
+    )
 
-            # Extract text from Responses API format
-            output = data.get("output", [])
-            text_parts = []
-            for item in output:
-                if item.get("type") == "message":
-                    for content in item.get("content", []):
-                        if content.get("type") == "output_text":
-                            text_parts.append(content.get("text", ""))
-            result = "\n".join(text_parts)
-
-            if not result:
-                # Fallback: try direct text field
-                result = data.get("output_text", "")
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream(
+                    "POST", url, json=payload, headers=headers,
+                ) as resp:
+                    resp.raise_for_status()
+                    result = await _parse_sse_stream(resp)
 
             if result:
                 logger.info("LLM summary generated: %d chars", len(result))
@@ -249,9 +241,78 @@ async def _call_llm(prompt: str, config: dict) -> str:
                 logger.warning("LLM returned empty response, using fallback")
                 return _generate_fallback_report(prompt)
 
-    except httpx.HTTPError as e:
-        logger.error("LLM API call failed: %s", e)
-        return _generate_fallback_report(prompt)
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                "LLM API returned HTTP %d: %s", e.response.status_code, e,
+            )
+            return _generate_fallback_report(prompt)
+        except httpx.TransportError as e:
+            if attempt < 2:
+                wait = 3 * (attempt + 1)
+                logger.warning(
+                    "LLM request failed (attempt %d/3, %s), retrying in %ds: %s",
+                    attempt + 1, type(e).__name__, wait, e,
+                )
+                await asyncio.sleep(wait)
+                continue
+            logger.error(
+                "LLM API call failed after 3 attempts (%s): %s",
+                type(e).__name__, e,
+            )
+            return _generate_fallback_report(prompt)
+
+    # Should not reach here, but satisfy type checker
+    return _generate_fallback_report(prompt)
+
+
+async def _parse_sse_stream(resp: object) -> str:
+    """Parse Server-Sent Events stream from Azure OpenAI Responses API.
+
+    Collects ``response.output_text.delta`` events and joins them.
+    If the connection drops mid-stream but we already have substantial
+    content (>= 500 chars), return the partial result instead of raising.
+    """
+    import httpx
+
+    text_parts: list[str] = []
+    line_count = 0
+    delta_count = 0
+    try:
+        async for line in resp.aiter_lines():  # type: ignore[union-attr]
+            line_count += 1
+            if not line.startswith("data: "):
+                continue
+            data_str = line[6:]
+            if data_str.strip() == "[DONE]":
+                break
+            try:
+                event = json.loads(data_str)
+                event_type = event.get("type", "")
+                if event_type == "response.output_text.delta":
+                    text_parts.append(event.get("delta", ""))
+                    delta_count += 1
+                # Log first non-delta event type for debugging
+                elif line_count <= 5:
+                    logger.debug("SSE event: %s", event_type)
+            except json.JSONDecodeError:
+                if line_count <= 3:
+                    logger.debug("SSE non-JSON line: %.200s", data_str)
+                continue
+    except httpx.TransportError as e:
+        partial = "".join(text_parts)
+        logger.info(
+            "Stream interrupted: lines=%d, deltas=%d, chars=%d (%s)",
+            line_count, delta_count, len(partial), type(e).__name__,
+        )
+        if len(partial) >= 500:
+            logger.warning(
+                "Using partial result (%d chars) despite stream disconnect",
+                len(partial),
+            )
+            return partial
+        # Too little content — re-raise so the caller retries
+        raise
+    return "".join(text_parts)
 
 
 def _generate_fallback_report(prompt: str) -> str:
