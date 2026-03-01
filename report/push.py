@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import timedelta, timezone
 
 import httpx
 
@@ -25,13 +26,18 @@ async def push_to_rss_worker(report: DigestReport, config: dict) -> bool:
         logger.error("RSS Worker URL or API key not configured")
         return False
 
+    # Use generated_at timestamp to make link/title unique across same-day pushes
+    ts = int(report.generated_at.timestamp())
+    beijing_tz = timezone(timedelta(hours=8))
+    time_suffix = report.generated_at.astimezone(beijing_tz).strftime("%H:%M")
+
     payload = {
-        "title": f"Daily Digest - {report.date}",
+        "title": f"Daily Digest - {report.date} ({time_suffix})",
         "content": report.full_markdown,
         "category": "daily-digest",
         "source": "daily-digest",
         "tags": ["digest", report.date],
-        "link": f"{url}/feed#digest-{report.date}",
+        "link": f"{url}/feed#digest-{report.date}-{ts}",
     }
 
     headers = {"X-API-Key": api_key, "Content-Type": "application/json"}

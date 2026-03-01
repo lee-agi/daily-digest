@@ -22,7 +22,7 @@ import json
 import logging
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
@@ -48,6 +48,67 @@ CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 DATA_DIR = PROJECT_ROOT / "data"
 
 
+def _inject_urls(urls: list[str]) -> None:
+    """Append URLs to data/pending_urls.yaml for ManualURLCollector."""
+    pending_path = DATA_DIR / "pending_urls.yaml"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    data: dict = {"pending": [], "processed_archive": []}
+    if pending_path.exists():
+        try:
+            loaded = yaml.safe_load(pending_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+                data.setdefault("pending", [])
+                data.setdefault("processed_archive", [])
+        except Exception:
+            pass
+
+    existing = {e.get("url") for e in data["pending"]}
+    existing |= {e.get("url") for e in data["processed_archive"]}
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    added = 0
+    for url in urls:
+        url = url.strip()
+        if url and url not in existing:
+            data["pending"].append({
+                "url": url,
+                "added_at": today,
+                "processed": False,
+            })
+            existing.add(url)
+            added += 1
+
+    pending_path.write_text(
+        yaml.dump(data, allow_unicode=True, default_flow_style=False),
+        encoding="utf-8",
+    )
+    logger.info("Injected %d new URL(s) into pending_urls.yaml", added)
+
+
+def _save_manual_suggestions(
+    target_date: str, items: list,
+) -> None:
+    """Save items that need manual deep processing to a JSON file."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    path = DATA_DIR / f"manual_suggestions-{target_date}.json"
+    suggestions = []
+    for item in items:
+        suggestions.append({
+            "title": item.title,
+            "url": item.url,
+            "source": item.source,
+            "duration": item.extra.get("duration", ""),
+            "reason": "large_download (>{} min)".format(30),
+        })
+    path.write_text(json.dumps(suggestions, ensure_ascii=False, indent=2))
+    logger.info(
+        "📋 %d items need manual deep processing: %s",
+        len(suggestions), path,
+    )
+
+
 def load_config() -> dict:
     with open(CONFIG_PATH) as f:
         return yaml.safe_load(f)
@@ -67,6 +128,42 @@ def import_collectors() -> None:
             logger.warning("Failed to import %s: %s", module_name, e)
 
 
+def _check_credentials(config: dict) -> None:
+    """Log credential status for each enabled source. INFO only, non-blocking."""
+    import os
+
+    cred_map: dict[str, list[tuple[str, str]]] = {
+        "x_twitter": [
+            ("TWITTER_API_IO_KEY", "TwitterAPI.io primary"),
+            ("X_AUTH_TOKEN", "twikit fallback"),
+        ],
+        "github": [("GITHUB_TOKEN", "PAT")],
+        "reddit": [
+            ("REDDIT_CLIENT_ID", "OAuth (optional, public API fallback works)"),
+        ],
+        "youtube": [("YOUTUBE_DATA_API_KEY", "Data API v3 (required)")],
+        "producthunt": [("PRODUCTHUNT_API_TOKEN", "Bearer Token")],
+        "zhihu": [],  # uses cookies file, not env var
+    }
+
+    sources_cfg = config.get("sources", {})
+    for source_name, creds in cred_map.items():
+        src = sources_cfg.get(source_name, {})
+        if not src.get("enabled", False):
+            continue
+        for env_var, desc in creds:
+            val = os.environ.get(env_var, "").strip()
+            if val:
+                logger.info(
+                    "[credentials] %s: %s (%s) = set", source_name, env_var, desc,
+                )
+            else:
+                logger.warning(
+                    "[credentials] %s: %s (%s) = MISSING",
+                    source_name, env_var, desc,
+                )
+
+
 async def run_collect(
     config: dict,
     target_date: str,
@@ -76,6 +173,9 @@ async def run_collect(
     from collectors.base import CollectorRegistry
 
     import_collectors()
+
+    # Log credential status before running collectors
+    _check_credentials(config)
 
     collectors = CollectorRegistry.create_all(config)
     if source_filter:
@@ -105,15 +205,27 @@ async def run_collect(
             result.items = unseen
             all_items.extend(unseen)
 
+    # Content enrichment phase
+    manual_suggestions: list = []
+    enrichment_cfg = config.get("enrichment", {})
+    if enrichment_cfg.get("enabled", False):
+        from collectors.enricher import ContentEnricher, EnrichmentConfig
+        ecfg = EnrichmentConfig.from_config(enrichment_cfg)
+        enricher = ContentEnricher(ecfg)
+        all_items, manual_suggestions = enricher.process_batch(all_items)
+        if manual_suggestions:
+            _save_manual_suggestions(target_date, manual_suggestions)
+
     # Save intermediate JSON
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    intermediate_path = DATA_DIR / f"collected-{target_date}.json"
+    ts = datetime.now().strftime("%H%M")
+    intermediate_path = DATA_DIR / f"collected-{target_date}-{ts}.json"
     items_data = [item.model_dump(mode="json") for item in all_items]
     intermediate_path.write_text(json.dumps(items_data, ensure_ascii=False, indent=2))
     logger.info("Saved %d items to %s", len(all_items), intermediate_path)
 
-    # Mark all collected items as seen
-    mark_seen(conn, all_items)
+    # NOTE: mark_seen is deferred to run_summarize_and_push() after push success.
+    # This prevents re-runs from losing items due to premature seen marking.
     conn.close()
 
     return results
@@ -125,10 +237,15 @@ async def run_summarize_and_push(
     dry_run: bool = False,
 ) -> None:
     """Phase 2: Load intermediate JSON, generate LLM summary, distribute."""
-    intermediate_path = DATA_DIR / f"collected-{target_date}.json"
-    if not intermediate_path.exists():
+    candidates = sorted(
+        DATA_DIR.glob(f"collected-{target_date}*.json"),
+        key=lambda p: p.stat().st_mtime,
+    )
+    if not candidates:
         logger.error("No collected data for %s. Run --collect-only first.", target_date)
         sys.exit(1)
+    intermediate_path = candidates[-1]
+    logger.info("Using intermediate file: %s", intermediate_path.name)
 
     items_data = json.loads(intermediate_path.read_text())
     items = [ContentItem.model_validate(d) for d in items_data]
@@ -145,17 +262,26 @@ async def run_summarize_and_push(
     # Save markdown report
     output_dir = Path(config["general"]["output_dir"]).expanduser()
     output_dir.mkdir(parents=True, exist_ok=True)
-    report_path = output_dir / f"digest-{target_date}.md"
+    beijing_tz = timezone(timedelta(hours=8))
+    time_suffix = report.generated_at.astimezone(beijing_tz).strftime("%H%M")
+    report_path = output_dir / f"digest-{target_date}-{time_suffix}.md"
     report_path.write_text(report.full_markdown, encoding="utf-8")
     logger.info("Report saved to %s", report_path)
 
     if dry_run:
-        logger.info("[DRY-RUN] Skipping push to RSS/Feishu")
+        logger.info("[DRY-RUN] Skipping push to RSS/Feishu (items NOT marked seen)")
         return
 
     # Push to RSS Worker + Feishu
     from report.push import push_report
     await push_report(report, config)
+
+    # Mark items as seen ONLY after successful push.
+    # This prevents re-runs/dry-runs from losing items.
+    conn = get_connection()
+    mark_seen(conn, items)
+    conn.close()
+    logger.info("Marked %d items as seen after successful push", len(items))
 
 
 async def main() -> None:
@@ -172,6 +298,12 @@ async def main() -> None:
                         help="Target date (default: today)")
     parser.add_argument("--source", default=None,
                         help="Run only a specific source")
+    parser.add_argument("--inject-url", action="append", default=[],
+                        dest="inject_urls",
+                        help="Inject URL(s) into pending_urls.yaml (repeatable)")
+    parser.add_argument("--lookback-hours", type=int, default=None,
+                        dest="lookback_hours",
+                        help="Override lookback_hours for all sources")
     parser.add_argument("--dry-run", action="store_true",
                         help="Don't push to RSS/Feishu")
     parser.add_argument("--verbose", action="store_true",
@@ -191,6 +323,16 @@ async def main() -> None:
 
     config = load_config()
     target_date = args.date
+
+    # Override lookback_hours for all sources if specified
+    if args.lookback_hours is not None:
+        for src_cfg in config.get("sources", {}).values():
+            src_cfg["lookback_hours"] = args.lookback_hours
+        logger.info("Overriding lookback_hours=%d for all sources", args.lookback_hours)
+
+    # Handle --inject-url: append to pending_urls.yaml
+    if args.inject_urls:
+        _inject_urls(args.inject_urls)
 
     # Create run record
     run_id = str(uuid.uuid4())[:8]

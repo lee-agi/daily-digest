@@ -29,7 +29,9 @@ class WeReadCollector(BaseCollector):
         """
         async with httpx.AsyncClient(timeout=5) as client:
             try:
-                resp = await client.get(f"{BROWSER_CDP_URL}/json")
+                resp = await self._request_with_retry(
+                    client, f"{BROWSER_CDP_URL}/json", max_retries=1,
+                )
                 resp.raise_for_status()
             except httpx.HTTPError:
                 logger.warning("[weread] Browser relay not available")

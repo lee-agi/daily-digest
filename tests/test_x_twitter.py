@@ -369,6 +369,7 @@ class TestTimeWindowFilter:
         response_data = _apiio_response(raw_tweets)
 
         mock_resp = MagicMock()
+        mock_resp.status_code = 200
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json.return_value = response_data
 
@@ -377,9 +378,9 @@ class TestTimeWindowFilter:
         clean_env["TWITTER_API_IO_KEY"] = "fake-key"
 
         with patch.dict(os.environ, clean_env, clear=True):
-            with patch("httpx.AsyncClient") as mock_cls:
+            with patch("collectors.x_twitter.httpx.AsyncClient") as mock_cls:
                 mock_client = AsyncMock()
-                mock_client.get = AsyncMock(return_value=mock_resp)
+                mock_client.request = AsyncMock(return_value=mock_resp)
                 mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
                 mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -412,13 +413,14 @@ class TestTwitterapiioPath:
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
 
-        def make_response(url, **kwargs):
+        def make_response(method, url, **kwargs):
             params = kwargs.get("params", {})
             list_id = params.get("listId", "")
             # Map list_id to list_name
             id_to_name = {"1664234382868250624": "LLM", "1934043689183256997": "Product"}
             name = id_to_name.get(list_id, "LLM")
             resp = MagicMock()
+            resp.status_code = 200
             resp.raise_for_status = MagicMock()
             resp.json.return_value = responses[name]
             return resp
@@ -428,9 +430,9 @@ class TestTwitterapiioPath:
         clean_env["TWITTER_API_IO_KEY"] = "fake-key"
 
         with patch.dict(os.environ, clean_env, clear=True):
-            with patch("httpx.AsyncClient") as mock_cls:
+            with patch("collectors.x_twitter.httpx.AsyncClient") as mock_cls:
                 mock_client = AsyncMock()
-                mock_client.get = AsyncMock(side_effect=make_response)
+                mock_client.request = AsyncMock(side_effect=make_response)
                 mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
                 mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -446,12 +448,13 @@ class TestTwitterapiioPath:
         """Verify X-API-Key header is passed to TwitterAPI.io."""
         collector = _make_collector(key="my-secret-key")
         resp = MagicMock()
+        resp.status_code = 200
         resp.raise_for_status = MagicMock()
         resp.json.return_value = _apiio_response([])
 
         captured_headers = {}
 
-        async def capture_get(url, **kwargs):
+        async def capture_request(method, url, **kwargs):
             captured_headers.update(kwargs.get("headers", {}))
             return resp
 
@@ -460,9 +463,9 @@ class TestTwitterapiioPath:
         clean_env["TWITTER_API_IO_KEY"] = "my-secret-key"
 
         with patch.dict(os.environ, clean_env, clear=True):
-            with patch("httpx.AsyncClient") as mock_cls:
+            with patch("collectors.x_twitter.httpx.AsyncClient") as mock_cls:
                 mock_client = AsyncMock()
-                mock_client.get = AsyncMock(side_effect=capture_get)
+                mock_client.request = AsyncMock(side_effect=capture_request)
                 mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
                 mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -505,20 +508,22 @@ class TestFallbackToTwikit:
         })
 
         with patch.dict(os.environ, clean_env, clear=True):
-            with patch("httpx.AsyncClient") as mock_cls:
-                # TwitterAPI.io raises an error
-                mock_client = AsyncMock()
-                mock_client.get = AsyncMock(
+            with patch("collectors.x_twitter.httpx.AsyncClient") as mock_cls:
+                # TwitterAPI.io returns 500 → _request_with_retry exhausts retries
+                error_resp = MagicMock()
+                error_resp.status_code = 500
+                error_resp.raise_for_status = MagicMock(
                     side_effect=httpx.HTTPStatusError(
-                        "500 Internal Server Error",
-                        request=MagicMock(),
-                        response=MagicMock(),
+                        "500", request=MagicMock(), response=error_resp,
                     )
                 )
+                mock_client = AsyncMock()
+                mock_client.request = AsyncMock(return_value=error_resp)
                 mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
                 mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
-                with patch("twikit.Client") as mock_twikit_cls:
+                with patch("asyncio.sleep", new_callable=AsyncMock), \
+                     patch("twikit.Client") as mock_twikit_cls:
                     mock_twikit_client = MagicMock()
                     mock_twikit_client.set_cookies = MagicMock()
                     mock_twikit_client.get_list_tweets = AsyncMock(

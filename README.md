@@ -1,8 +1,8 @@
 # Daily Digest - Multi-Source Daily Information Aggregator
 
-每日多源信息聚合系统，自动从 18 个平台采集内容，去重过滤后生成 LLM 摘要报告。
+每日多源信息聚合系统，自动从 19 个平台采集内容，去重过滤后通过 any2summary 深度增强高质量条目，生成 LLM 摘要报告。
 
-**当前版本**: v0.13.0 | **活跃源**: 16/18 | **典型产出**: ~360 items/run
+**当前版本**: v0.17.0 | **活跃源**: 16/19 | **典型产出**: ~360 items/run
 
 ## Quick Start
 
@@ -21,8 +21,10 @@ docker-compose -f docker/docker-compose.yml up -d
 
 # 4. 运行
 python orchestrator.py --full --dry-run  # 完整流程（不推送）
+python orchestrator.py --full --dry-run --lookback-hours 48  # 自定义回溯窗口
 python orchestrator.py --collect-only     # 仅采集
 python orchestrator.py --collect-only --source huggingface  # 单源测试
+python orchestrator.py --collect-only --inject-url "https://example.com"  # 注入 URL
 ```
 
 ## Data Sources
@@ -32,7 +34,7 @@ python orchestrator.py --collect-only --source huggingface  # 单源测试
 | X/Twitter | TwitterAPI.io (+ twikit fallback) | TWITTER_API_IO_KEY (+ X_AUTH_TOKEN/X_CT0) |
 | GitHub | REST API | GITHUB_TOKEN (optional) |
 | Reddit | OAuth2/Public API | REDDIT_CLIENT_ID/SECRET (optional) |
-| YouTube | Native RSS | None |
+| YouTube | Data API v3 (playlistItems) | YOUTUBE_DATA_API_KEY (required) |
 | 知乎 | Direct API (hot/recommend/follow) | zhihu-cli cookies |
 | 即刻 | RSSHub | JIKE_COOKIES → RSSHub |
 | 小宇宙 | RSSHub | None |
@@ -47,6 +49,25 @@ python orchestrator.py --collect-only --source huggingface  # 单源测试
 | 机器之心/量子位/AI洞察日报 | RSS (GitHub/CloudFlare) | None |
 | 宝玉博客 | RSSHub /baoyu/blog | RSSHub |
 | Product Hunt | GraphQL API (top 10/day) | PRODUCTHUNT_API_TOKEN |
+| Manual URLs | any2summary + Mac Reminders T5T | None |
+
+## Content Enrichment
+
+v0.14.0 新增内容增强功能，在采集完成后自动对高质量条目调用 [any2summary](~/Documents/Code/any2summary) 获取全文/转录：
+
+- **文章** (Anthropic/OpenAI/量子位等): 内容 <5k 字符的全部自动获取全文
+- **YouTube**: 按互动率 (likes+comments)/views 排序，top-N 获取字幕+摘要
+- **播客**: ≤30min 自动转录，>30min 输出 manual suggestion
+- **手动 URL**: `data/pending_urls.yaml` 或 `--inject-url` 注入
+
+```bash
+# 注入 URL
+python orchestrator.py --collect-only --inject-url "https://example.com/article"
+
+# Mac Reminders "T5T" 清单中的 URL 自动导入 (config.yaml reminders_enabled: true)
+```
+
+配置位于 `config.yaml` 的 `enrichment` 部分。
 
 ## Adding New Sources
 
@@ -108,3 +129,5 @@ Configured via `~/.openclaw/cron/jobs.json`.
 ## Known Issues
 - **Reddit**: OAuth app registration blocked by Responsible Builder Policy; using public API (13 items/run)
 - **Proxy**: httpx 0.28 + `httpx[socks]` ignores `proxy=None` for localhost; RSSHub collector uses `AsyncHTTPTransport()` to bypass
+- **YouTube RSS deprecated**: YouTube permanently disabled RSS feeds (404). Migrated to Data API v3 `playlistItems.list` in v0.15.0. `YOUTUBE_DATA_API_KEY` is now required.
+- **RSSHub sources**: Jike disabled (no user IDs configured); Baoyu Blog depends on RSSHub at localhost:1200. RSSHub collector probes reachability before fetching.

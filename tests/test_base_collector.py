@@ -3,7 +3,9 @@
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -108,3 +110,166 @@ class TestBaseCollector:
         expected = datetime.now(timezone.utc) - timedelta(hours=12)
         # Within 1 second tolerance
         assert abs((cutoff - expected).total_seconds()) < 1
+
+
+class TestRequestWithRetry:
+    """Tests for BaseCollector._request_with_retry()."""
+
+    def _make_response(self, status_code: int) -> httpx.Response:
+        """Create a mock httpx.Response with the given status code."""
+        request = httpx.Request("GET", "https://example.com/test")
+        return httpx.Response(status_code=status_code, request=request)
+
+    @pytest.mark.asyncio
+    async def test_retry_on_500(self):
+        """500 on first attempt, 200 on second → should succeed."""
+        collector = MockCollector({"score_threshold": 0})
+        resp_500 = self._make_response(500)
+        resp_200 = self._make_response(200)
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.request = AsyncMock(side_effect=[resp_500, resp_200])
+
+        result = await collector._request_with_retry(
+            client, "https://example.com/test", base_delay=0.01,
+        )
+        assert result.status_code == 200
+        assert client.request.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_on_429(self):
+        """429 on first attempt, 200 on second → should succeed."""
+        collector = MockCollector({"score_threshold": 0})
+        resp_429 = self._make_response(429)
+        resp_200 = self._make_response(200)
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.request = AsyncMock(side_effect=[resp_429, resp_200])
+
+        result = await collector._request_with_retry(
+            client, "https://example.com/test", base_delay=0.01,
+        )
+        assert result.status_code == 200
+        assert client.request.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_on_timeout(self):
+        """TimeoutException on first attempt, 200 on second → should succeed."""
+        collector = MockCollector({"score_threshold": 0})
+        resp_200 = self._make_response(200)
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.request = AsyncMock(side_effect=[
+            httpx.TimeoutException("timed out"),
+            resp_200,
+        ])
+
+        result = await collector._request_with_retry(
+            client, "https://example.com/test", base_delay=0.01,
+        )
+        assert result.status_code == 200
+        assert client.request.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_no_retry_on_401(self):
+        """401 should raise immediately without retrying."""
+        collector = MockCollector({"score_threshold": 0})
+        resp_401 = self._make_response(401)
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.request = AsyncMock(return_value=resp_401)
+
+        # 401 is a 4xx (not 429), so it should return the response directly
+        # (the caller is responsible for calling raise_for_status if needed)
+        result = await collector._request_with_retry(
+            client, "https://example.com/test", base_delay=0.01,
+        )
+        assert result.status_code == 401
+        assert client.request.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_on_remote_protocol_error(self):
+        """RemoteProtocolError on first attempt, 200 on second → should succeed."""
+        collector = MockCollector({"score_threshold": 0})
+        resp_200 = self._make_response(200)
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.request = AsyncMock(side_effect=[
+            httpx.RemoteProtocolError("incomplete chunked read"),
+            resp_200,
+        ])
+
+        result = await collector._request_with_retry(
+            client, "https://example.com/test", base_delay=0.01,
+        )
+        assert result.status_code == 200
+        assert client.request.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_on_connect_error(self):
+        """ConnectError on first attempt, 200 on second → should succeed."""
+        collector = MockCollector({"score_threshold": 0})
+        resp_200 = self._make_response(200)
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.request = AsyncMock(side_effect=[
+            httpx.ConnectError("connection refused"),
+            resp_200,
+        ])
+
+        result = await collector._request_with_retry(
+            client, "https://example.com/test", base_delay=0.01,
+        )
+        assert result.status_code == 200
+        assert client.request.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_on_read_error(self):
+        """ReadError on first attempt, 200 on second → should succeed."""
+        collector = MockCollector({"score_threshold": 0})
+        resp_200 = self._make_response(200)
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.request = AsyncMock(side_effect=[
+            httpx.ReadError("read error"),
+            resp_200,
+        ])
+
+        result = await collector._request_with_retry(
+            client, "https://example.com/test", base_delay=0.01,
+        )
+        assert result.status_code == 200
+        assert client.request.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_transport_error_retry_exhausted(self):
+        """TransportError retries exhausted → should raise."""
+        collector = MockCollector({"score_threshold": 0})
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.request = AsyncMock(side_effect=httpx.RemoteProtocolError(
+            "incomplete chunked read",
+        ))
+
+        with pytest.raises(httpx.RemoteProtocolError):
+            await collector._request_with_retry(
+                client, "https://example.com/test",
+                max_retries=3, base_delay=0.01,
+            )
+        assert client.request.call_count == 4
+
+    @pytest.mark.asyncio
+    async def test_retry_exhausted(self):
+        """4 consecutive 500s (max_retries=3) should raise HTTPStatusError."""
+        collector = MockCollector({"score_threshold": 0})
+        responses = [self._make_response(500) for _ in range(4)]
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.request = AsyncMock(side_effect=responses)
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await collector._request_with_retry(
+                client, "https://example.com/test",
+                max_retries=3, base_delay=0.01,
+            )
+        assert client.request.call_count == 4

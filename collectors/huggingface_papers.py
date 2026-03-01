@@ -28,7 +28,7 @@ class HuggingFacePapersCollector(BaseCollector):
         items = []
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             try:
-                resp = await client.get(HF_PAPERS_API)
+                resp = await self._request_with_retry(client, HF_PAPERS_API)
                 resp.raise_for_status()
                 papers = resp.json()
             except httpx.HTTPError as e:

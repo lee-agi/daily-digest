@@ -34,7 +34,7 @@ class ApplePodcastCollector(BaseCollector):
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             for feed_url in self.feeds:
                 try:
-                    resp = await client.get(feed_url)
+                    resp = await self._request_with_retry(client, feed_url)
                     resp.raise_for_status()
                     feed = feedparser.parse(resp.text)
                 except httpx.HTTPError as e:
@@ -80,6 +80,15 @@ class ApplePodcastCollector(BaseCollector):
         # Get duration if available
         duration = entry.get("itunes_duration", "")
 
+        # Parse enclosure file size (bytes)
+        file_size_bytes = 0
+        enclosures = entry.get("enclosures", [])
+        if enclosures:
+            try:
+                file_size_bytes = int(enclosures[0].get("length", 0))
+            except (ValueError, TypeError, IndexError):
+                pass
+
         return ContentItem(
             source="apple_podcast",
             source_type=SourceType.RSS,
@@ -90,5 +99,9 @@ class ApplePodcastCollector(BaseCollector):
             published_at=published,
             score=0.0,  # RSS doesn't expose listen counts
             tags=["podcast"],
-            extra={"podcast": podcast_title, "duration": duration},
+            extra={
+                "podcast": podcast_title,
+                "duration": duration,
+                "file_size_bytes": file_size_bytes,
+            },
         )

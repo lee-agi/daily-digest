@@ -54,7 +54,7 @@ sources:
 
   youtube:
     enabled: true
-    source_type: rss
+    source_type: api
     score_threshold: 0         # RSS has no score, rely on subscriptions
     lookback_hours: 24
     max_items: 30
@@ -89,17 +89,23 @@ sources:
   zhihu:
     enabled: true
     source_type: api
-    score_threshold: 50        # Based on voteup_count, keep items with >= 50 votes
+    score_threshold: 0         # Set to 0, actual filtering controlled by feed_filters
     lookback_hours: 24
     max_items: 50              # Combined limit across all feed types
     feed_types:
-      - hot
       - recommend
       - follow
     limit_per_feed: 20         # Top N per feed type, sorted by score
+    feed_filters:
+      recommend:
+        min_voteup: 1000
+        min_favorite: 100
+      follow:
+        min_voteup: 50
+        min_favorite: 10
 
   jike:
-    enabled: true
+    enabled: false
     source_type: rss
     score_threshold: 50        # Minimum likes
     lookback_hours: 24
@@ -218,6 +224,16 @@ sources:
     lookback_hours: 24
     max_items: 10
 
+  manual_urls:
+    enabled: true
+    source_type: http_scrape
+    score_threshold: 0
+    lookback_hours: 720   # Wide window — manual items should always be included
+    max_items: 20
+    file: "data/pending_urls.yaml"
+    reminders_list: "T5T"    # Mac Reminders list name
+    reminders_enabled: true
+
   producthunt:
     enabled: true
     source_type: api
@@ -225,6 +241,29 @@ sources:
     lookback_hours: 24    # Placeholder — actual query uses PST day boundaries
     max_items: 10         # Top 10 products of the day
     # token: from env PRODUCTHUNT_API_TOKEN
+
+# Content enrichment via any2summary
+enrichment:
+  enabled: true
+  timeout_seconds: 180
+  large_download_minutes: 30
+  article_auto_threshold: 5000   # Articles with content < 5k chars are auto-enriched
+  content_max_chars: 3000        # ContentItem.content truncation length
+  any2summary_dir: "~/Documents/Code/any2summary"
+  sources:
+    youtube:
+      enabled: true
+      top_n: 5
+      # Uses YOUTUBE_DATA_API_KEY env var for engagement rate
+    apple_podcast:
+      enabled: true
+      top_n: 3
+    xiaoyuzhou:
+      enabled: true
+      top_n: 3
+    articles:
+      enabled: true
+      top_n: 10    # Beyond the auto-threshold articles
 
 # Ad content filtering
 ad_filter:

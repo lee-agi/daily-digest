@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -37,8 +38,10 @@ class RedditCollector(BaseCollector):
             return None
 
         try:
-            resp = await client.post(
+            resp = await self._request_with_retry(
+                client,
                 REDDIT_AUTH_URL,
+                method="POST",
                 auth=(self.client_id, self.client_secret),
                 data={"grant_type": "client_credentials"},
                 headers={"User-Agent": "daily-digest/0.1.0"},
@@ -66,57 +69,83 @@ class RedditCollector(BaseCollector):
     async def _collect_oauth(
         self, client: httpx.AsyncClient, token: str
     ) -> list[ContentItem]:
-        """Fetch posts using OAuth2 API."""
+        """Fetch posts using OAuth2 API with cursor pagination."""
         headers = {
             "Authorization": f"Bearer {token}",
             "User-Agent": "daily-digest/0.1.0",
         }
         items = []
+        max_pages = 3
 
         for sub in self.subreddits:
-            try:
-                resp = await client.get(
-                    f"{REDDIT_API}/r/{sub}/hot",
-                    headers=headers,
-                    params={"limit": 50, "t": "day"},
-                )
-                resp.raise_for_status()
-                data = resp.json()
-            except httpx.HTTPError as e:
-                logger.error("[reddit] Failed to fetch r/%s: %s", sub, e)
-                continue
+            after = None
+            for _ in range(max_pages):
+                params: dict[str, Any] = {"limit": 50, "t": "day"}
+                if after:
+                    params["after"] = after
 
-            for post_data in data.get("data", {}).get("children", []):
-                post = post_data.get("data", {})
-                item = self._parse_post(post, sub)
-                if item and item.published_at >= self.cutoff_time:
-                    items.append(item)
+                try:
+                    resp = await self._request_with_retry(
+                        client,
+                        f"{REDDIT_API}/r/{sub}/hot",
+                        headers=headers,
+                        params=params,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                except httpx.HTTPError as e:
+                    logger.error("[reddit] Failed to fetch r/%s: %s", sub, e)
+                    break
+
+                for post_data in data.get("data", {}).get("children", []):
+                    post = post_data.get("data", {})
+                    item = self._parse_post(post, sub)
+                    if item and item.published_at >= self.cutoff_time:
+                        items.append(item)
+
+                after = data.get("data", {}).get("after")
+                if not after:
+                    break
+                await asyncio.sleep(0.3)
 
         return items
 
     async def _collect_public(self, client: httpx.AsyncClient) -> list[ContentItem]:
-        """Fallback: fetch posts using public JSON API."""
+        """Fallback: fetch posts using public JSON API with cursor pagination."""
         items = []
         headers = {"User-Agent": "daily-digest/0.1.0"}
+        max_pages = 3
 
         for sub in self.subreddits:
-            try:
-                resp = await client.get(
-                    f"https://www.reddit.com/r/{sub}/hot.json",
-                    headers=headers,
-                    params={"limit": 50, "t": "day"},
-                )
-                resp.raise_for_status()
-                data = resp.json()
-            except httpx.HTTPError as e:
-                logger.error("[reddit] Public API failed for r/%s: %s", sub, e)
-                continue
+            after = None
+            for _ in range(max_pages):
+                params: dict[str, Any] = {"limit": 50, "t": "day"}
+                if after:
+                    params["after"] = after
 
-            for post_data in data.get("data", {}).get("children", []):
-                post = post_data.get("data", {})
-                item = self._parse_post(post, sub)
-                if item and item.published_at >= self.cutoff_time:
-                    items.append(item)
+                try:
+                    resp = await self._request_with_retry(
+                        client,
+                        f"https://www.reddit.com/r/{sub}/hot.json",
+                        headers=headers,
+                        params=params,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                except httpx.HTTPError as e:
+                    logger.error("[reddit] Public API failed for r/%s: %s", sub, e)
+                    break
+
+                for post_data in data.get("data", {}).get("children", []):
+                    post = post_data.get("data", {})
+                    item = self._parse_post(post, sub)
+                    if item and item.published_at >= self.cutoff_time:
+                        items.append(item)
+
+                after = data.get("data", {}).get("after")
+                if not after:
+                    break
+                await asyncio.sleep(0.3)
 
         return items
 

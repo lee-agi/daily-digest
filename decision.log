@@ -1,5 +1,33 @@
 # Daily Digest Decision Log
 
+## 2026-03-01: 本地文件名时间戳 + --lookback-hours + /digest-run skill (v0.17.1)
+
+### Decision: 方案 A — 新增 `--lookback-hours` CLI flag
+- **Why**: 干净、可复用，orchestrator 内部统一覆盖所有 source 的 `lookback_hours` 配置
+- **Alternatives**: 方案 B — Skill 内 sed 临时改 config.yaml（脏，容易出错）
+- **Consequences**: 需同步更新 CLAUDE.md 文档中的 CLI 参数说明
+
+### Decision: Skill 命名 `/digest-run`
+- **Why**: 准确描述功能（手动重跑生成报告），避免 "e2e-test" 的误导
+- **Alternatives**: `/digest-e2e-test`（听起来像测试而非工具）
+- **Consequences**: 无
+
+---
+
+## 2026-03-01: Fix any2summary Responses API + Enricher Circuit Breaker (v0.17.0)
+
+### Decision 1: Raw httpx 替换 OpenAI SDK 调用 Responses API
+- **Decision**: 用 `_call_responses_api()` + raw httpx 替换 `OpenAI(base_url=...).responses.create()`
+- **Why**: OpenAI SDK 构造的 URL/auth/proxy 均有 bug（`/openai/v1/responses`, `Authorization: Bearer`, 走代理），导致 enrichment hang
+- **Alternatives**: (1) 修改 SDK 参数（SDK 不支持 `api-key` header 和正确的 Responses API 路径）; (2) 环境变量 workaround（已有 `AZURE_OPENAI_RESPONSES_BASE_URL` 但只解决 URL 问题）
+- **Consequences**: 需维护 raw httpx 调用，但完全控制 URL/auth/proxy；删除了 `AZURE_OPENAI_RESPONSES_BASE_URL` 环境变量依赖
+
+### Decision 2: Enricher 熔断器（per-category circuit breaker）
+- **Decision**: `process_batch()` 每个类别连续 3 次失败后跳过剩余 items
+- **Why**: Azure 宕机时 N 个 item × 180s subprocess 超时 = 30+ 分钟阻塞
+- **Alternatives**: (1) 全局超时（不够灵活，一个类别失败影响所有）; (2) 并行处理（增加复杂度，any2summary 不支持并发）
+- **Consequences**: 局部降级而非全局阻塞；成功时自动 reset 计数器
+
 ## 2026-02-23: End-to-End Verification & Production Deployment (v0.3.0)
 
 ### Decision 1: Podcast feeds → apple_podcast instead of xiaoyuzhou RSSHub
@@ -199,3 +227,103 @@
 - **Why**: TTFT 120s 对 Codex 处理 62k 字符 prompt 足够（实测 ~150s 内完成全部流式传输）；原来的 600s 导致失败时要等 10 分钟才 fallback；30s 实测不够（Codex TTFT > 30s）
 - **Alternatives**: (1) 30s — 实测 3 次全部 ReadTimeout; (2) 600s — 浪费重试时间; (3) 120s — 平衡 TTFT 容忍度和快速失败
 - **Consequences**: 最坏情况 3 次重试总耗时 ~6 分钟（3×120s + sleep），比之前 ~30 分钟大幅缩短
+
+## 2026-02-28: Content Enrichment via any2summary (v0.14.0)
+
+### Decision 29: any2summary 通过 subprocess 调用而非 Python import
+- **Decision**: 通过 `subprocess.run(["python3", "-m", "any2summary.cli", ...])` 调用 any2summary，而非直接 import 其模块
+- **Why**: any2summary 未安装到 daily-digest 的 `.venv` 中，有独立的依赖链（openai、yt-dlp、numpy 等）；subprocess 调用天然隔离依赖，避免版本冲突；any2summary 自带缓存机制（`~/.cache/any2summary/`），重复调用自动命中
+- **Alternatives**: (1) pip install any2summary 到 daily-digest venv — 引入 yt-dlp/numpy 等重依赖，增加 venv 体积和潜在冲突; (2) 抽取 any2summary 核心函数为 library — 改动面大且两个项目需同步维护
+- **Consequences**: 调用开销约 1-2s 初始化 + 实际处理时间；需要 PYTHONPATH 指向 any2summary 目录；any2summary 升级不影响 daily-digest
+
+### Decision 30: YouTube 互动率 — Data API v3 可选增强
+- **Decision**: `YOUTUBE_DATA_API_KEY` 存在时调用 YouTube Data API v3 `videos.list(part="statistics")`，获取 likeCount/commentCount 计算互动率；无 key 时降级到现有 viewCount
+- **Why**: 互动率 `(likes+comments)/views` 比纯播放量更能反映内容质量（高互动 = 引发讨论/共鸣）；API key 可选设计不增加必需依赖
+- **Alternatives**: (1) 只用 viewCount — 大频道流量碾压小频道，质量信号弱; (2) 强制要求 API key — 增加部署门槛
+- **Consequences**: 有 API key 时 score 从 viewCount 变为 engagement_rate × 1e6（归一化排序）；API 调用免费额度 10k/天，远超每日需求
+
+### Decision 31: 播客内容增强 — 30min 阈值分流
+- **Decision**: 播客时长 >30min → 归入 manual_suggestions（不自动转录）；≤30min → 尝试 any2summary
+- **Why**: 长播客（>30min）的音频下载+转录成本高（带宽 50-200MB、Azure Whisper 计费约 $0.1/h），且摘要质量随长度下降；短播客（<30min）处理成本可控，且更可能被用户完整收听
+- **Alternatives**: (1) 全部转录 — 每天可能 10+ 小时音频，成本 >$1/天; (2) 全部跳过 — 浪费播客数据
+- **Consequences**: manual_suggestions JSON 文件输出供人工决策；短播客自动增强内容质量
+
+### Decision 32: Mac Reminders T5T — osascript 直读
+- **Decision**: 通过 `osascript` AppleScript 直接读取 Mac Reminders "T5T" 清单中的未完成条目，提取 URL 注入 pending_urls.yaml
+- **Why**: osascript 是 macOS 内置工具，无需额外依赖；Reminders 是用户已有的工作流（随手保存链接）；提取后的 URL 统一进入 pending_urls.yaml 管道
+- **Alternatives**: (1) 使用 Shortcuts/快捷指令 — 需要额外配置和权限; (2) EventKit framework 直接读取 — 需要 Swift/ObjC 桥接，过度工程
+- **Consequences**: 首次运行会弹出 macOS 权限确认对话框；非 macOS 环境下 graceful fallback（FileNotFoundError）
+
+## 2026-02-28: Fix Collector Failures (v0.15.0)
+
+### Decision 36: YouTube RSS → Data API v3 playlistItems.list
+- **Decision**: 完全移除 feedparser/RSS 代码，改用 YouTube Data API v3 `playlistItems.list` 端点，每个 channel 推导 uploads playlist (`UC...` → `UU...`)
+- **Why**: YouTube 已永久废弃 RSS feed 端点（所有 42 频道返回 404），无替代 RSS 方案；Data API v3 是官方推荐的视频列表获取方式，配额 10k units/天，42 频道仅消耗 42 units（<0.5%）
+- **Alternatives**: (1) 第三方 RSS 桥接（如 RSSHub /youtube/channel/...）— 依赖 RSSHub 运行且可能也失效; (2) yt-dlp 抓取 — 过重，anti-bot 风险
+- **Consequences**: `YOUTUBE_DATA_API_KEY` 从可选变为必须；`source_type` 从 `rss` 改为 `api`；移除 feedparser 依赖
+
+### Decision 37: Wrapper scripts source ~/.secrets（根因修复）
+- **Decision**: 在 `scripts/run-collect.sh` 和 `run-summarize.sh` 中加入 `source ~/.secrets 2>/dev/null || true`
+- **Why**: X Twitter、ProductHunt、YouTube 的 API token 存储在 `~/.secrets` 中，但 wrapper scripts 只 source 了 `.env` 和 `~/.bashrc`（仅 AZURE 变量），导致 launchd 触发时这些 token 为空
+- **Alternatives**: (1) 将 token 移到 .env — 与 ~/.secrets 统一管理策略冲突; (2) 在 launchd plist 中配置 EnvironmentVariables — 暴露密钥
+- **Consequences**: 所有 API token 在 launchd 和手动执行时均可用；~/.secrets 不存在时静默跳过
+
+### Decision 38: RSSHub 可达性探测
+- **Decision**: 在 `RSSHubCollector.collect()` 中，feed 循环前发送 HEAD 请求到 `rsshub_base`（timeout 3s），不可达时 return []
+- **Why**: RSSHub Docker 未运行时，每个 feed URL 都会触发 30s connect timeout 后才报错，Jike 3 个 + Baoyu 1 个 = 2 分钟无效等待
+- **Alternatives**: (1) 在 orchestrator 层检查 — 需要知道哪些 collector 依赖 RSSHub，耦合度高; (2) 降低 httpx timeout — 影响正常慢响应场景
+- **Consequences**: RSSHub 不可达时 WARNING 日志 + 0 items，不影响其他 collector
+
+### Decision 39: Jike 永久禁用
+- **Decision**: `config.yaml` 中 `jike.enabled: true` → `false`
+- **Why**: `user_ids: []` 为空配置无意义（collect 返回 0 URLs）；即刻无官方 API，RSSHub 路由需运行 Docker；无用户 ID 数据源
+- **Alternatives**: (1) 保持 enabled + 空列表 — 产生无意义日志; (2) 删除配置 — 不便后续恢复
+- **Consequences**: 活跃源从 17 减至 16（YouTube 需 API key，Jike + WeRead 禁用）
+
+## 2026-02-28: E2E 测试修复 — LLM 调用稳定性 (v0.14.0)
+
+### Decision 33: LLM 代理绕过 — AsyncHTTPTransport 直连 Azure OpenAI
+- **Decision**: 在 `report/generator.py` 的 `_call_llm()` 中使用 `httpx.AsyncHTTPTransport()` 作为显式 transport，绕过系统 SOCKS 代理直连 Azure OpenAI
+- **Why**: 本地 SOCKS 代理（127.0.0.1:7890）在 LLM 推理期间（TTFT 30-150s）触发 idle timeout，导致 SSE 连接被代理服务器关闭（RemoteProtocolError: peer closed connection without sending complete message body）；Azure OpenAI 无需代理即可直连
+- **Alternatives**: (1) 增加代理的 idle timeout — 需修改代理服务器配置，非 daily-digest 可控; (2) 设置 NO_PROXY 环境变量 — 影响其他需要代理的 collector
+- **Consequences**: LLM 请求直连 Azure，不受代理 idle timeout 限制；其他 collector 仍通过系统代理访问外网
+
+### Decision 34: 非流式 Responses API 替代 SSE 流式
+- **Decision**: 将 `_call_llm()` 从 SSE 流式模式（`"stream": True` + `aiter_lines()`）改为非流式同步 POST（等待完整响应）
+- **Why**: 即使绕过代理直连，Azure APIM 层面仍会在模型长时间思考时断开 SSE 连接（0 delta tokens 接收后 RemoteProtocolError），根因是 Azure 前端网关的 idle timeout 而非网络层问题；非流式模式下 HTTP 连接在整个推理过程中保持活跃（Azure 负责维持 keep-alive）
+- **Alternatives**: (1) 保持 SSE + 增加 partial result 容忍 — `_parse_sse_stream()` 已有 >=500 chars partial fallback，但 0 chars partial 无法恢复; (2) 使用 WebSocket — Azure OpenAI 不支持
+- **Consequences**: 非流式模式无法实时展示生成进度（不影响无头 cron 场景）；read timeout 需从 120s 增至 600s 以容纳模型完整推理时间；`_parse_sse_stream()` 函数保留但当前未使用
+
+### Decision 35: 内容截断 500→300 字符以控制 prompt 规模
+- **Decision**: 将 `generate_digest_report()` 中 `item.content[:500]` 改为 `item.content[:300]`
+- **Why**: 191 条内容以 500 字符截断生成 113k 字符 prompt，导致 Codex 推理时间过长（>600s），非流式请求也可能因 Azure APIM 超时断开；300 字符截断将 prompt 降至 ~100k 字符，在保留足够上下文的同时减少推理负担
+- **Alternatives**: (1) 保持 500 字符 — 大批量时 prompt 过大; (2) 动态截断（按总条目数调整）— 过度工程，当前 300 字符已足够
+- **Consequences**: LLM 可见的每条内容减少 200 字符，可能略微影响长文章的摘要质量；实测 10 条内容（5.6k chars prompt）52s 完成生成，质量无明显下降
+
+## 2026-02-28: 全局重试机制 + 三源分页修复 (v0.16.0)
+
+### Decision 40: 重试机制 — BaseCollector 共享方法
+- **Decision**: `BaseCollector._request_with_retry()` + 全量迁移 17 个 collector
+- **Why**: 所有 collector 面临相同的 HTTP 瞬态错误（5xx/429/timeout），统一实现避免 17 份重复代码；指数退避（1s→2s→4s）平衡效率和服务端压力
+- **Alternatives**: (1) 各 collector 独立实现 retry — 代码重复; (2) httpx Transport 层中间件 — 不够灵活（无法按 collector 定制 max_retries）
+- **Consequences**: weread 特殊设置 max_retries=1（timeout=5 场景）；4xx（非429）不重试直接返回；所有 collector 自动获得重试能力
+
+### Decision 41: 分页策略 — 三种 API 各用原生分页
+- **Decision**: zhihu 用 page_number + paging.next; reddit 用 after cursor; github 用 page 参数
+- **Why**: 各 API 分页机制不同，遵循原生方式最可靠；max_pages 限制（3-5页）防止无限循环；页间 sleep(0.3-0.5s) 对 rate limit 友好
+- **Alternatives**: (1) 统一抽象分页器 — 三种 API 差异大，抽象成本高于收益; (2) 不做分页 — zhihu 每次只取 6 条、reddit/github 单页可能不足
+- **Consequences**: zhihu recommend 可获取 ≥20 条原始数据（原仅 6 条）；reddit/github 最多 3 页×50/30 条
+
+## 2026-02-28: 统一 --full 单触发 (v0.16.1)
+
+### Decision 42: 合并两阶段调度为单次 --full 触发
+- **Decision**: 删除 launchd 06:30 `--collect-only` + OpenClaw cron 07:00 `--summarize-and-push` 两阶段调度，改为 OpenClaw cron 07:00 单次 `scripts/run.sh`（默认 `--full`）
+- **Why**: 两阶段调度是每日报告质量极差的根因 — `--collect-only` 将大部分条目标记为 seen（写入 SQLite state），`--summarize-and-push` 阶段再次 collect 时大部分条目已去重，仅获取 ~8 items（vs 手动 --full 307 items）。单次 `--full` 在同一进程中完成 collect→summarize→push，条目仅在 push 成功后才标记 seen
+- **Alternatives**: (1) 修改 state.py 仅在 push 后标记 seen — 改动面大，且两脚本间仍有 30 分钟时间差导致条目变化; (2) 保持两阶段但传递中间文件 — 增加复杂度，不如直接 --full
+- **Consequences**: launchd plist 已卸载删除；旧脚本已删除；单次执行约 9 分钟（collect ~5min + LLM ~4min）
+
+### Decision 43: 禁用 enrichment
+- **Decision**: `config.yaml` 中 `enrichment.enabled: true` → `false`
+- **Why**: any2summary 子进程调用 Azure OpenAI 时会 hang（超时或无响应），阻塞整个 orchestrator 运行
+- **Alternatives**: (1) 增加 timeout — 根因是 Azure 端问题，timeout 无法解决; (2) 异步非阻塞调用 — 需要较大重构
+- **Consequences**: 暂时失去内容增强功能（全文提取/视频转录）；核心 collect→summarize→push 流程不受影响

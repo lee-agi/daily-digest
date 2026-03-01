@@ -43,8 +43,8 @@ class CnTechBlogCollector(BaseCollector):
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             for feed_url in self.feeds:
                 try:
-                    resp = await client.get(
-                        feed_url,
+                    resp = await self._request_with_retry(
+                        client, feed_url,
                         headers={"User-Agent": "daily-digest/0.9.0"},
                     )
                     resp.raise_for_status()

@@ -26,11 +26,15 @@ def base_config():
     return {
         "enabled": True,
         "source_type": "api",
-        "score_threshold": 50,
+        "score_threshold": 0,
         "lookback_hours": 24,
         "max_items": 50,
-        "feed_types": ["hot", "recommend", "follow"],
+        "feed_types": ["recommend", "follow"],
         "limit_per_feed": 20,
+        "feed_filters": {
+            "recommend": {"min_voteup": 1000, "min_favorite": 100},
+            "follow": {"min_voteup": 50, "min_favorite": 10},
+        },
     }
 
 
@@ -100,6 +104,7 @@ def recommend_response():
                     "title": "推荐文章1",
                     "author": {"name": "作者A"},
                     "voteup_count": 200,
+                    "favorite_count": 50,
                     "excerpt": "文章摘要",
                     "created_time": 1708700000,
                 },
@@ -112,6 +117,7 @@ def recommend_response():
                     "question": {"id": 333, "title": "推荐问题1"},
                     "author": {"name": "作者B"},
                     "voteup_count": 150,
+                    "favorite_count": 30,
                     "excerpt": "回答摘要",
                     "created_time": 1708700000,
                 },
@@ -123,13 +129,15 @@ def recommend_response():
                     "id": 999,
                     "title": "广告内容",
                     "voteup_count": 0,
+                    "favorite_count": 0,
                 },
             },
             {
                 "type": "normal",
                 "target": {},  # empty target, should be skipped
             },
-        ]
+        ],
+        "paging": {"is_end": True, "next": ""},
     }
 
 
@@ -145,11 +153,13 @@ def follow_response():
                     "question": {"id": 555, "title": "关注问题1"},
                     "author": {"name": "作者C"},
                     "voteup_count": 300,
+                    "favorite_count": 80,
                     "excerpt": "关注回答摘要",
                     "created_time": 1708700000,
                 },
             },
-        ]
+        ],
+        "paging": {"is_end": True, "next": ""},
     }
 
 
@@ -323,6 +333,20 @@ class TestRecommendFollowParsing:
         assert scores["推荐文章1"] == 200
         assert scores["推荐问题1"] == 150
 
+    def test_favorite_count_in_extra(self, collector, recommend_response):
+        """favorite_count should be stored in extra."""
+        items = collector._parse_recommend_or_follow(recommend_response)
+        extras = {i.title: i.extra for i in items}
+        assert extras["推荐文章1"]["favorite_count"] == 50
+        assert extras["推荐问题1"]["favorite_count"] == 30
+
+    def test_voteup_count_in_extra(self, collector, recommend_response):
+        """voteup_count should be stored in extra."""
+        items = collector._parse_recommend_or_follow(recommend_response)
+        extras = {i.title: i.extra for i in items}
+        assert extras["推荐文章1"]["voteup_count"] == 200
+        assert extras["推荐问题1"]["voteup_count"] == 150
+
     def test_created_time_parsing(self, collector, recommend_response):
         """Unix timestamp created_time should be parsed to datetime."""
         items = collector._parse_recommend_or_follow(recommend_response)
@@ -380,6 +404,190 @@ class TestCrossFeedDedup:
         # But if we had exact same URL, only one would appear
         urls = [i.url for i in all_items]
         assert len(urls) == len(set(urls))
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Per-feed 过滤测试
+# ═══════════════════════════════════════════════════════════════════
+
+class TestFeedFiltering:
+    """Tests for _apply_feed_filter() per-feed filtering."""
+
+    @pytest.fixture
+    def filter_collector(self):
+        """Collector with feed_filters configured."""
+        return ZhihuCliCollector({
+            "enabled": True,
+            "source_type": "api",
+            "score_threshold": 0,
+            "lookback_hours": 24,
+            "max_items": 50,
+            "feed_types": ["recommend", "follow"],
+            "limit_per_feed": 20,
+            "feed_filters": {
+                "recommend": {"min_voteup": 1000, "min_favorite": 100},
+                "follow": {"min_voteup": 50, "min_favorite": 10},
+            },
+        })
+
+    def _make_items(self, collector, entries):
+        """Helper: parse mock data into ContentItems."""
+        data = {"data": entries}
+        return collector._parse_recommend_or_follow(data)
+
+    def test_recommend_filter_passes(self, filter_collector):
+        """Items meeting recommend thresholds should pass."""
+        entries = [{
+            "type": "normal",
+            "target": {
+                "type": "article", "id": 1, "title": "高赞文章",
+                "author": {"name": "A"}, "voteup_count": 2000,
+                "favorite_count": 500, "excerpt": "x", "created_time": 1708700000,
+            },
+        }]
+        items = self._make_items(filter_collector, entries)
+        feed_filter = filter_collector.feed_filters["recommend"]
+        result = filter_collector._apply_feed_filter(items, feed_filter, "recommend")
+        assert len(result) == 1
+
+    def test_recommend_filter_blocks_low_voteup(self, filter_collector):
+        """Items below min_voteup should be filtered out."""
+        entries = [{
+            "type": "normal",
+            "target": {
+                "type": "article", "id": 2, "title": "低赞文章",
+                "author": {"name": "A"}, "voteup_count": 500,
+                "favorite_count": 200, "excerpt": "x", "created_time": 1708700000,
+            },
+        }]
+        items = self._make_items(filter_collector, entries)
+        feed_filter = filter_collector.feed_filters["recommend"]
+        result = filter_collector._apply_feed_filter(items, feed_filter, "recommend")
+        assert len(result) == 0
+
+    def test_recommend_filter_blocks_low_favorite(self, filter_collector):
+        """Items below min_favorite should be filtered out."""
+        entries = [{
+            "type": "normal",
+            "target": {
+                "type": "article", "id": 3, "title": "少收藏文章",
+                "author": {"name": "A"}, "voteup_count": 2000,
+                "favorite_count": 50, "excerpt": "x", "created_time": 1708700000,
+            },
+        }]
+        items = self._make_items(filter_collector, entries)
+        feed_filter = filter_collector.feed_filters["recommend"]
+        result = filter_collector._apply_feed_filter(items, feed_filter, "recommend")
+        assert len(result) == 0
+
+    def test_follow_filter_passes(self, filter_collector):
+        """Items meeting follow thresholds should pass."""
+        entries = [{
+            "type": "normal",
+            "target": {
+                "type": "answer", "id": 4,
+                "question": {"id": 100, "title": "关注问题"},
+                "author": {"name": "B"}, "voteup_count": 100,
+                "favorite_count": 20, "excerpt": "x", "created_time": 1708700000,
+            },
+        }]
+        items = self._make_items(filter_collector, entries)
+        feed_filter = filter_collector.feed_filters["follow"]
+        result = filter_collector._apply_feed_filter(items, feed_filter, "follow")
+        assert len(result) == 1
+
+    def test_follow_filter_blocks(self, filter_collector):
+        """Items below follow thresholds should be filtered out."""
+        entries = [{
+            "type": "normal",
+            "target": {
+                "type": "answer", "id": 5,
+                "question": {"id": 101, "title": "低质问题"},
+                "author": {"name": "C"}, "voteup_count": 30,
+                "favorite_count": 5, "excerpt": "x", "created_time": 1708700000,
+            },
+        }]
+        items = self._make_items(filter_collector, entries)
+        feed_filter = filter_collector.feed_filters["follow"]
+        result = filter_collector._apply_feed_filter(items, feed_filter, "follow")
+        assert len(result) == 0
+
+    def test_collect_with_feed_filters(self, filter_collector):
+        """collect() should apply feed_filters and reduce item count."""
+        recommend_data = {
+            "data": [
+                {
+                    "type": "normal",
+                    "target": {
+                        "type": "article", "id": 10, "title": "高赞推荐",
+                        "author": {"name": "A"}, "voteup_count": 2000,
+                        "favorite_count": 500, "excerpt": "x", "created_time": 1708700000,
+                    },
+                },
+                {
+                    "type": "normal",
+                    "target": {
+                        "type": "article", "id": 11, "title": "低赞推荐",
+                        "author": {"name": "B"}, "voteup_count": 100,
+                        "favorite_count": 10, "excerpt": "x", "created_time": 1708700000,
+                    },
+                },
+            ],
+            "paging": {"is_end": True, "next": ""},
+        }
+        follow_data = {
+            "data": [
+                {
+                    "type": "normal",
+                    "target": {
+                        "type": "answer", "id": 20,
+                        "question": {"id": 200, "title": "关注达标"},
+                        "author": {"name": "C"}, "voteup_count": 100,
+                        "favorite_count": 20, "excerpt": "x", "created_time": 1708700000,
+                    },
+                },
+                {
+                    "type": "normal",
+                    "target": {
+                        "type": "answer", "id": 21,
+                        "question": {"id": 201, "title": "关注不达标"},
+                        "author": {"name": "D"}, "voteup_count": 10,
+                        "favorite_count": 2, "excerpt": "x", "created_time": 1708700000,
+                    },
+                },
+            ],
+            "paging": {"is_end": True, "next": ""},
+        }
+        mock_responses = {"recommend": recommend_data, "follow": follow_data}
+
+        async def mock_request(method, url, **kwargs):
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.raise_for_status = MagicMock()
+            for key, data in mock_responses.items():
+                if key in url:
+                    resp.json.return_value = data
+                    return resp
+            resp.json.return_value = {"data": [], "paging": {"is_end": True}}
+            return resp
+
+        with patch.object(filter_collector, "_load_cookies", return_value={"z_c0": "x"}):
+            with patch("collectors.zhihu_collector.httpx.AsyncClient") as mock_client:
+                mock_instance = AsyncMock()
+                mock_instance.request = mock_request
+                mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+                mock_instance.__aexit__ = AsyncMock(return_value=False)
+                mock_client.return_value = mock_instance
+
+                items = asyncio.run(filter_collector.collect())
+
+        # recommend: 1 pass (高赞推荐), follow: 1 pass (关注达标) = 2 total
+        assert len(items) == 2
+        titles = {i.title for i in items}
+        assert "高赞推荐" in titles
+        assert "关注达标" in titles
+        assert "低赞推荐" not in titles
+        assert "关注不达标" not in titles
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -444,6 +652,37 @@ class TestConfiguration:
         c = ZhihuCliCollector(config)
         assert c.limit_per_feed == 10
 
+    def test_feed_filters_config(self):
+        """feed_filters should be read from config."""
+        config = {
+            "enabled": True,
+            "source_type": "api",
+            "score_threshold": 0,
+            "lookback_hours": 24,
+            "max_items": 50,
+            "feed_filters": {
+                "recommend": {"min_voteup": 1000, "min_favorite": 100},
+                "follow": {"min_voteup": 50, "min_favorite": 10},
+            },
+        }
+        c = ZhihuCliCollector(config)
+        assert c.feed_filters["recommend"]["min_voteup"] == 1000
+        assert c.feed_filters["recommend"]["min_favorite"] == 100
+        assert c.feed_filters["follow"]["min_voteup"] == 50
+        assert c.feed_filters["follow"]["min_favorite"] == 10
+
+    def test_feed_filters_default_empty(self):
+        """feed_filters should default to empty dict."""
+        config = {
+            "enabled": True,
+            "source_type": "api",
+            "score_threshold": 0,
+            "lookback_hours": 24,
+            "max_items": 50,
+        }
+        c = ZhihuCliCollector(config)
+        assert c.feed_filters == {}
+
 
 # ═══════════════════════════════════════════════════════════════════
 # collect() 端到端 mock 测试
@@ -451,16 +690,27 @@ class TestConfiguration:
 
 class TestCollectMocked:
     def test_collect_all_feeds(
-        self, collector, hot_response, recommend_response, follow_response
+        self, recommend_response, follow_response
     ):
-        """collect() should merge items from all 3 feeds."""
+        """collect() should merge items from recommend + follow feeds (no hot)."""
+        # Use a collector WITHOUT feed_filters so all items pass through
+        config = {
+            "enabled": True,
+            "source_type": "api",
+            "score_threshold": 0,
+            "lookback_hours": 24,
+            "max_items": 50,
+            "feed_types": ["recommend", "follow"],
+            "limit_per_feed": 20,
+        }
+        c = ZhihuCliCollector(config)
+
         mock_responses = {
-            "hot-lists": hot_response,
             "recommend": recommend_response,
             "follow": follow_response,
         }
 
-        async def mock_get(url, **kwargs):
+        async def mock_request(method, url, **kwargs):
             resp = MagicMock()
             resp.status_code = 200
             resp.raise_for_status = MagicMock()
@@ -468,21 +718,21 @@ class TestCollectMocked:
                 if key in url:
                     resp.json.return_value = data
                     return resp
-            resp.json.return_value = {"data": []}
+            resp.json.return_value = {"data": [], "paging": {"is_end": True}}
             return resp
 
-        with patch.object(collector, "_load_cookies", return_value={"z_c0": "x"}):
+        with patch.object(c, "_load_cookies", return_value={"z_c0": "x"}):
             with patch("collectors.zhihu_collector.httpx.AsyncClient") as mock_client:
                 mock_instance = AsyncMock()
-                mock_instance.get = mock_get
+                mock_instance.request = mock_request
                 mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
                 mock_instance.__aexit__ = AsyncMock(return_value=False)
                 mock_client.return_value = mock_instance
 
-                items = asyncio.run(collector.collect())
+                items = asyncio.run(c.collect())
 
-        # hot: 3 items, recommend: 2 items, follow: 1 item = 6 total
-        assert len(items) == 6
+        # recommend: 2 items (paging.is_end=True stops), follow: 1 item = 3 total
+        assert len(items) == 3
 
     def test_collect_no_cookies_returns_empty(self, collector):
         """collect() should return [] when cookies file is missing."""
@@ -494,14 +744,18 @@ class TestCollectMocked:
         """collect() should return [] on API error and log it."""
         import httpx
 
+        mock_resp = MagicMock()
+        mock_resp.status_code = 401
+
         with patch.object(
             collector, "_load_cookies", return_value={"z_c0": "x"}
         ):
             with patch("collectors.zhihu_collector.httpx.AsyncClient") as mock_client:
                 mock_instance = AsyncMock()
-                mock_instance.get = AsyncMock(
+                mock_instance.request = AsyncMock(return_value=mock_resp)
+                mock_resp.raise_for_status = MagicMock(
                     side_effect=httpx.HTTPStatusError(
-                        "401", request=MagicMock(), response=MagicMock()
+                        "401", request=MagicMock(), response=mock_resp
                     )
                 )
                 mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
@@ -587,3 +841,199 @@ class TestZhihuIntegration:
         result = asyncio.run(c.run())
         assert result.success, f"Collector failed: {result.error}"
         assert result.raw_count > 0
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 分页测试
+# ═══════════════════════════════════════════════════════════════════
+
+class TestPagination:
+    """Tests for recommend/follow pagination."""
+
+    @pytest.fixture
+    def paginated_collector(self):
+        return ZhihuCliCollector({
+            "enabled": True,
+            "source_type": "api",
+            "score_threshold": 0,
+            "lookback_hours": 24,
+            "max_items": 100,
+            "feed_types": ["recommend"],
+            "limit_per_feed": 20,
+        })
+
+    def _make_page(self, ids, is_end=False, next_url=""):
+        """Create a mock response page with given item IDs."""
+        data = []
+        for i in ids:
+            data.append({
+                "type": "normal",
+                "target": {
+                    "type": "article",
+                    "id": i,
+                    "title": f"文章{i}",
+                    "author": {"name": f"作者{i}"},
+                    "voteup_count": 100 + i,
+                    "favorite_count": 10 + i,
+                    "excerpt": f"摘要{i}",
+                    "created_time": 1708700000,
+                },
+            })
+        return {
+            "data": data,
+            "paging": {"is_end": is_end, "next": next_url},
+        }
+
+    def test_recommend_multiple_pages(self, paginated_collector):
+        """Recommend should fetch multiple pages and merge results."""
+        pages = [
+            self._make_page([1, 2, 3]),
+            self._make_page([4, 5, 6]),
+            self._make_page([7, 8, 9], is_end=True),
+        ]
+        call_count = {"n": 0}
+
+        async def mock_request(method, url, **kwargs):
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.raise_for_status = MagicMock()
+            idx = call_count["n"]
+            call_count["n"] += 1
+            if idx < len(pages):
+                resp.json.return_value = pages[idx]
+            else:
+                resp.json.return_value = {"data": [], "paging": {"is_end": True}}
+            return resp
+
+        with patch.object(paginated_collector, "_load_cookies", return_value={"z_c0": "x"}):
+            with patch("collectors.zhihu_collector.httpx.AsyncClient") as mock_client:
+                mock_instance = AsyncMock()
+                mock_instance.request = mock_request
+                mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+                mock_instance.__aexit__ = AsyncMock(return_value=False)
+                mock_client.return_value = mock_instance
+
+                items = asyncio.run(paginated_collector.collect())
+
+        assert len(items) == 9
+        titles = [i.title for i in items]
+        assert "文章1" in titles
+        assert "文章9" in titles
+
+    def test_recommend_stops_at_is_end(self, paginated_collector):
+        """Recommend should stop when paging.is_end is True."""
+        pages = [
+            self._make_page([1, 2], is_end=True),
+            self._make_page([3, 4]),  # should NOT be fetched
+        ]
+        call_count = {"n": 0}
+
+        async def mock_request(method, url, **kwargs):
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.raise_for_status = MagicMock()
+            idx = call_count["n"]
+            call_count["n"] += 1
+            resp.json.return_value = pages[min(idx, len(pages) - 1)]
+            return resp
+
+        with patch.object(paginated_collector, "_load_cookies", return_value={"z_c0": "x"}):
+            with patch("collectors.zhihu_collector.httpx.AsyncClient") as mock_client:
+                mock_instance = AsyncMock()
+                mock_instance.request = mock_request
+                mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+                mock_instance.__aexit__ = AsyncMock(return_value=False)
+                mock_client.return_value = mock_instance
+
+                items = asyncio.run(paginated_collector.collect())
+
+        assert len(items) == 2
+        assert call_count["n"] == 1  # Only 1 request made
+
+    def test_recommend_stops_at_limit(self):
+        """Recommend should stop when limit_per_feed is reached."""
+        collector = ZhihuCliCollector({
+            "enabled": True,
+            "source_type": "api",
+            "score_threshold": 0,
+            "lookback_hours": 24,
+            "max_items": 100,
+            "feed_types": ["recommend"],
+            "limit_per_feed": 5,
+        })
+        pages = [
+            self._make_page([1, 2, 3]),
+            self._make_page([4, 5, 6]),
+            self._make_page([7, 8, 9]),
+        ]
+        call_count = {"n": 0}
+
+        async def mock_request(method, url, **kwargs):
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.raise_for_status = MagicMock()
+            idx = call_count["n"]
+            call_count["n"] += 1
+            if idx < len(pages):
+                resp.json.return_value = pages[idx]
+            else:
+                resp.json.return_value = {"data": [], "paging": {"is_end": True}}
+            return resp
+
+        with patch.object(collector, "_load_cookies", return_value={"z_c0": "x"}):
+            with patch("collectors.zhihu_collector.httpx.AsyncClient") as mock_client:
+                mock_instance = AsyncMock()
+                mock_instance.request = mock_request
+                mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+                mock_instance.__aexit__ = AsyncMock(return_value=False)
+                mock_client.return_value = mock_instance
+
+                items = asyncio.run(collector.collect())
+
+        # After page 2, we have 6 items >= limit_per_feed(5), so stop
+        assert len(items) >= 5
+        assert call_count["n"] == 2
+
+    def test_follow_uses_paging_next(self):
+        """Follow should use paging.next URL for subsequent pages."""
+        collector = ZhihuCliCollector({
+            "enabled": True,
+            "source_type": "api",
+            "score_threshold": 0,
+            "lookback_hours": 24,
+            "max_items": 100,
+            "feed_types": ["follow"],
+            "limit_per_feed": 20,
+        })
+        page1 = self._make_page(
+            [1, 2],
+            next_url="https://www.zhihu.com/api/v3/feed/topstory/follow?cursor=abc",
+        )
+        page2 = self._make_page([3, 4], is_end=True)
+
+        requested_urls = []
+
+        async def mock_request(method, url, **kwargs):
+            requested_urls.append(url)
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.raise_for_status = MagicMock()
+            if len(requested_urls) == 1:
+                resp.json.return_value = page1
+            else:
+                resp.json.return_value = page2
+            return resp
+
+        with patch.object(collector, "_load_cookies", return_value={"z_c0": "x"}):
+            with patch("collectors.zhihu_collector.httpx.AsyncClient") as mock_client:
+                mock_instance = AsyncMock()
+                mock_instance.request = mock_request
+                mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+                mock_instance.__aexit__ = AsyncMock(return_value=False)
+                mock_client.return_value = mock_instance
+
+                items = asyncio.run(collector.collect())
+
+        assert len(items) == 4
+        assert len(requested_urls) == 2
+        assert "cursor=abc" in requested_urls[1]

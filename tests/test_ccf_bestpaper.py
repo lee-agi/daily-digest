@@ -18,6 +18,7 @@ import logging
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -228,7 +229,11 @@ class TestAAAIAwards:
     async def test_fetch_aaai_awards_2025(self):
         """Fetch AAAI 2025 awards (past recipients section)."""
         collector = _make_collector()
-        items = await collector._fetch_aaai_awards(2025)
+        try:
+            items = await collector._fetch_aaai_awards(2025)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+            pytest.skip(f"Network unreachable: {e}")
+            return  # unreachable, satisfies type checker
 
         assert len(items) >= 2, (
             f"Expected >=2 AAAI 2025 award papers, got {len(items)}"

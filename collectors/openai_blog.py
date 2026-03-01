@@ -28,8 +28,8 @@ class OpenAIBlogCollector(BaseCollector):
         items: list[ContentItem] = []
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             try:
-                resp = await client.get(
-                    OPENAI_RSS_URL,
+                resp = await self._request_with_retry(
+                    client, OPENAI_RSS_URL,
                     headers={"User-Agent": "daily-digest/0.2.0"},
                 )
                 resp.raise_for_status()

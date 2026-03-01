@@ -240,12 +240,13 @@ class TestCollectMocked:
         api_response = self._make_api_response(nodes)
 
         mock_resp = MagicMock()
+        mock_resp.status_code = 200
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json.return_value = api_response
 
-        with patch("httpx.AsyncClient") as mock_client_cls:
+        with patch("collectors.producthunt_collector.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
-            mock_client.post = AsyncMock(return_value=mock_resp)
+            mock_client.request = AsyncMock(return_value=mock_resp)
             mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -265,12 +266,13 @@ class TestCollectMocked:
         api_response = self._make_api_response(nodes)
 
         mock_resp = MagicMock()
+        mock_resp.status_code = 200
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json.return_value = api_response
 
-        with patch("httpx.AsyncClient") as mock_client_cls:
+        with patch("collectors.producthunt_collector.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
-            mock_client.post = AsyncMock(return_value=mock_resp)
+            mock_client.request = AsyncMock(return_value=mock_resp)
             mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -285,12 +287,13 @@ class TestCollectMocked:
         api_response = {"data": {"posts": {"edges": []}}}
 
         mock_resp = MagicMock()
+        mock_resp.status_code = 200
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json.return_value = api_response
 
-        with patch("httpx.AsyncClient") as mock_client_cls:
+        with patch("collectors.producthunt_collector.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
-            mock_client.post = AsyncMock(return_value=mock_resp)
+            mock_client.request = AsyncMock(return_value=mock_resp)
             mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -312,12 +315,13 @@ class TestCollectMocked:
         api_response = {"data": {"posts": {"edges": [{"node": n} for n in nodes]}}}
 
         mock_resp = MagicMock()
+        mock_resp.status_code = 200
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json.return_value = api_response
 
-        with patch("httpx.AsyncClient") as mock_client_cls:
+        with patch("collectors.producthunt_collector.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
-            mock_client.post = AsyncMock(return_value=mock_resp)
+            mock_client.request = AsyncMock(return_value=mock_resp)
             mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 

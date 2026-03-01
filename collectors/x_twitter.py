@@ -118,7 +118,8 @@ class XTwitterCollector(BaseCollector):
                 if cursor:
                     params["cursor"] = cursor
 
-                resp = await client.get(
+                resp = await self._request_with_retry(
+                    client,
                     f"{TWITTERAPIIO_BASE}/twitter/list/tweets",
                     params=params,
                     headers={"X-API-Key": api_key},

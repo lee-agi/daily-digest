@@ -73,8 +73,10 @@ class ProductHuntCollector(BaseCollector):
         variables = {"after": after, "before": before, "first": self.max_items}
 
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
+            resp = await self._request_with_retry(
+                client,
                 GRAPHQL_ENDPOINT,
+                method="POST",
                 headers={
                     "Authorization": f"Bearer {self.token}",
                     "Content-Type": "application/json",

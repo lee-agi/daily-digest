@@ -91,7 +91,7 @@ async def generate_digest_report(
                 "author": item.author,
                 "source": item.source,
                 "url": item.url,
-                "content": item.content[:500],  # Truncate for LLM context
+                "content": item.content[:300],  # Truncate for LLM context
                 "score": item.score,
                 "published_at": item.published_at.isoformat(),
                 "tags": item.tags,
@@ -212,14 +212,17 @@ async def _call_llm(prompt: str, config: dict) -> str:
         "model": model,
         "input": prompt,
         "max_output_tokens": 16000,
-        "stream": True,
+        "stream": True,  # streaming keeps connection alive, prevents idle-timeout drops
     }
     headers = {
         "api-key": api_key,
         "Content-Type": "application/json",
     }
-    # 120s read timeout: TTFT limit for large prompts on Codex models
-    timeout = httpx.Timeout(connect=30.0, read=120.0, write=60.0, pool=30.0)
+    # 600s read timeout for streaming — tokens arrive continuously so no idle disconnect.
+    timeout = httpx.Timeout(connect=30.0, read=600.0, write=60.0, pool=30.0)
+    # Bypass proxy — Azure OpenAI is directly reachable and proxies
+    # introduce idle-timeout disconnects during long model thinking.
+    transport = httpx.AsyncHTTPTransport()
 
     logger.info(
         "Calling LLM: model=%s, url=%s, prompt_chars=%d", model, url, len(prompt)
@@ -227,10 +230,8 @@ async def _call_llm(prompt: str, config: dict) -> str:
 
     for attempt in range(3):
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                async with client.stream(
-                    "POST", url, json=payload, headers=headers,
-                ) as resp:
+            async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
+                async with client.stream("POST", url, json=payload, headers=headers) as resp:
                     resp.raise_for_status()
                     result = await _parse_sse_stream(resp)
 
@@ -265,6 +266,18 @@ async def _call_llm(prompt: str, config: dict) -> str:
     return _generate_fallback_report(prompt)
 
 
+def _extract_response_text(data: dict) -> str:
+    """Extract text content from Azure OpenAI Responses API non-streaming response."""
+    output = data.get("output", [])
+    text_parts = []
+    for item in output:
+        if item.get("type") == "message":
+            for content in item.get("content", []):
+                if content.get("type") == "output_text":
+                    text_parts.append(content.get("text", ""))
+    return "".join(text_parts)
+
+
 async def _parse_sse_stream(resp: object) -> str:
     """Parse Server-Sent Events stream from Azure OpenAI Responses API.
 
@@ -280,6 +293,8 @@ async def _parse_sse_stream(resp: object) -> str:
     try:
         async for line in resp.aiter_lines():  # type: ignore[union-attr]
             line_count += 1
+            # Debug: log every raw SSE line (truncated to 500 chars)
+            logger.debug("SSE line %d: %.500s", line_count, line)
             if not line.startswith("data: "):
                 continue
             data_str = line[6:]
@@ -291,11 +306,11 @@ async def _parse_sse_stream(resp: object) -> str:
                 if event_type == "response.output_text.delta":
                     text_parts.append(event.get("delta", ""))
                     delta_count += 1
-                # Log first non-delta event type for debugging
-                elif line_count <= 5:
+                # Log non-delta event types for debugging
+                elif line_count <= 10:
                     logger.debug("SSE event: %s", event_type)
             except json.JSONDecodeError:
-                if line_count <= 3:
+                if line_count <= 5:
                     logger.debug("SSE non-JSON line: %.200s", data_str)
                 continue
     except httpx.TransportError as e:

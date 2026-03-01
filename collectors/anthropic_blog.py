@@ -69,8 +69,8 @@ class AnthropicBlogCollector(BaseCollector):
         """Scrape a single page (/engineering or /research) for blog posts."""
         url = f"{BASE_URL}{page_path}"
         try:
-            resp = await client.get(
-                url, headers={"User-Agent": "daily-digest/0.2.0"}
+            resp = await self._request_with_retry(
+                client, url, headers={"User-Agent": "daily-digest/0.2.0"}
             )
             resp.raise_for_status()
         except httpx.HTTPError as e:
@@ -179,8 +179,8 @@ class AnthropicBlogCollector(BaseCollector):
     ) -> list[ContentItem]:
         """Fallback: parse sitemap.xml for /engineering/ and /research/ URLs."""
         try:
-            resp = await client.get(
-                f"{BASE_URL}/sitemap.xml",
+            resp = await self._request_with_retry(
+                client, f"{BASE_URL}/sitemap.xml",
                 headers={"User-Agent": "daily-digest/0.2.0"},
             )
             resp.raise_for_status()

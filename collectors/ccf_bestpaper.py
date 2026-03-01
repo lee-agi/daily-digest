@@ -161,7 +161,7 @@ class CcfBestPaperCollector(BaseCollector):
               date: December 9-15, 2024
         """
         url = CCF_DEADLINES_RAW.format(key=conf.yml_key)
-        resp = await client.get(url)
+        resp = await self._request_with_retry(client, url)
         resp.raise_for_status()
 
         data = yaml.safe_load(resp.text)
@@ -216,7 +216,7 @@ class CcfBestPaperCollector(BaseCollector):
                     "details": "replies",
                 }
                 try:
-                    resp = await client.get(OPENREVIEW_API, params=params)
+                    resp = await self._request_with_retry(client, OPENREVIEW_API, params=params)
                     resp.raise_for_status()
                     data = resp.json()
                 except httpx.HTTPError as e:
@@ -427,7 +427,7 @@ class CcfBestPaperCollector(BaseCollector):
         async with httpx.AsyncClient(
             timeout=30, follow_redirects=True, headers=_HTTP_HEADERS,
         ) as client:
-            resp = await client.get(AAAI_AWARDS_URL)
+            resp = await self._request_with_retry(client, AAAI_AWARDS_URL)
             resp.raise_for_status()
 
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -568,7 +568,7 @@ class CcfBestPaperCollector(BaseCollector):
         async with httpx.AsyncClient(
             timeout=30, follow_redirects=True, headers=_HTTP_HEADERS,
         ) as client:
-            resp = await client.get(url)
+            resp = await self._request_with_retry(client, url)
             if resp.status_code == 404:
                 logger.info(
                     "[ccf_bestpaper] CVPR %d awards page not found (404)", year,
@@ -656,7 +656,7 @@ class CcfBestPaperCollector(BaseCollector):
         async with httpx.AsyncClient(
             timeout=30, follow_redirects=True, headers=_HTTP_HEADERS,
         ) as client:
-            resp = await client.get(url)
+            resp = await self._request_with_retry(client, url)
             if resp.status_code == 404:
                 logger.info(
                     "[ccf_bestpaper] ACL %d awards page not found (404)", year,

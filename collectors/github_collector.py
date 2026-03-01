@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -48,54 +49,67 @@ class GitHubCollector(BaseCollector):
         return items
 
     async def _fetch_trending(self, client: httpx.AsyncClient) -> list[ContentItem]:
-        """Fetch trending repos created or pushed in the last 24h."""
+        """Fetch trending repos created or pushed in the last 24h with pagination."""
         cutoff_str = self.cutoff_time.strftime("%Y-%m-%dT%H:%M:%SZ")
         query = f"pushed:>{cutoff_str} stars:>5"
-        params = {
-            "q": query,
-            "sort": "stars",
-            "order": "desc",
-            "per_page": min(self.max_items, 30),
-        }
+        all_items: list[ContentItem] = []
+        max_pages = 3
 
-        try:
-            resp = await client.get(f"{GITHUB_API}/search/repositories", params=params)
-            resp.raise_for_status()
-            data = resp.json()
-        except httpx.HTTPError as e:
-            logger.error("[github] Trending search failed: %s", e)
-            return []
+        for page in range(1, max_pages + 1):
+            params = {
+                "q": query,
+                "sort": "stars",
+                "order": "desc",
+                "per_page": 30,
+                "page": page,
+            }
 
-        items = []
-        for repo in data.get("items", []):
-            pushed_at = dateutil_parser.parse(repo["pushed_at"])
-            if pushed_at.tzinfo is None:
-                pushed_at = pushed_at.replace(tzinfo=timezone.utc)
+            try:
+                resp = await self._request_with_retry(
+                    client, f"{GITHUB_API}/search/repositories", params=params,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except httpx.HTTPError as e:
+                logger.error("[github] Trending search failed: %s", e)
+                break
 
-            items.append(ContentItem(
-                source="github",
-                source_type=SourceType.API,
-                title=f"{repo['full_name']}: {repo.get('description', '')}",
-                url=repo["html_url"],
-                author=repo["owner"]["login"],
-                content=repo.get("description", ""),
-                published_at=pushed_at,
-                score=float(repo.get("stargazers_count", 0)),
-                tags=repo.get("topics", []),
-                language=repo.get("language") or "en",
-                extra={
-                    "stars": repo.get("stargazers_count", 0),
-                    "forks": repo.get("forks_count", 0),
-                    "language": repo.get("language"),
-                },
-            ))
-        return items
+            repos = data.get("items", [])
+            for repo in repos:
+                pushed_at = dateutil_parser.parse(repo["pushed_at"])
+                if pushed_at.tzinfo is None:
+                    pushed_at = pushed_at.replace(tzinfo=timezone.utc)
+
+                all_items.append(ContentItem(
+                    source="github",
+                    source_type=SourceType.API,
+                    title=f"{repo['full_name']}: {repo.get('description', '')}",
+                    url=repo["html_url"],
+                    author=repo["owner"]["login"],
+                    content=repo.get("description", ""),
+                    published_at=pushed_at,
+                    score=float(repo.get("stargazers_count", 0)),
+                    tags=repo.get("topics", []),
+                    language=repo.get("language") or "en",
+                    extra={
+                        "stars": repo.get("stargazers_count", 0),
+                        "forks": repo.get("forks_count", 0),
+                        "language": repo.get("language"),
+                    },
+                ))
+
+            if len(repos) < 30 or len(all_items) >= self.max_items:
+                break
+            await asyncio.sleep(0.5)
+
+        return all_items
 
     async def _fetch_starred_releases(self, client: httpx.AsyncClient) -> list[ContentItem]:
         """Fetch recent releases from user's starred repos."""
         # Get user's starred repos (limited to recent activity)
         try:
-            resp = await client.get(
+            resp = await self._request_with_retry(
+                client,
                 f"{GITHUB_API}/user/starred",
                 params={"per_page": 50, "sort": "updated"},
             )
@@ -108,7 +122,8 @@ class GitHubCollector(BaseCollector):
         items = []
         for repo in starred_repos[:30]:  # Limit API calls
             try:
-                resp = await client.get(
+                resp = await self._request_with_retry(
+                    client,
                     f"{GITHUB_API}/repos/{repo['full_name']}/releases",
                     params={"per_page": 3},
                 )

@@ -45,8 +45,8 @@ class CoolPaperCollector(BaseCollector):
             for category in self.categories:
                 url = f"{COOLPAPER_URL}/arxiv/{category}"
                 try:
-                    resp = await client.get(
-                        url,
+                    resp = await self._request_with_retry(
+                        client, url,
                         headers={"User-Agent": "daily-digest/0.1.0"},
                     )
                     resp.raise_for_status()

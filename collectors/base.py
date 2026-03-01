@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import Any, ClassVar
+
+import httpx
 
 from aggregator.ad_filter import AdFilter
 from schema import CollectorResult, ContentItem, SourceType
@@ -47,6 +50,14 @@ class CollectorRegistry:
         sources_config = config.get("sources", {})
         ad_filter_cfg = config.get("ad_filter", {})
         ad_filter = AdFilter(ad_filter_cfg) if ad_filter_cfg.get("enabled", False) else None
+
+        # Build enrichment config for manual_urls collector
+        enrichment_config = None
+        enrichment_cfg = config.get("enrichment", {})
+        if enrichment_cfg.get("enabled", False):
+            from collectors.enricher import EnrichmentConfig
+            enrichment_config = EnrichmentConfig.from_config(enrichment_cfg)
+
         instances = []
         for name, src_cfg in sources_config.items():
             if not src_cfg.get("enabled", True):
@@ -55,6 +66,9 @@ class CollectorRegistry:
             if collector_cls is None:
                 logger.warning("No collector registered for source: %s", name)
                 continue
+            # Inject enrichment config for manual_urls
+            if name == "manual_urls" and enrichment_config is not None:
+                src_cfg = {**src_cfg, "_enrichment_config": enrichment_config}
             try:
                 instances.append(collector_cls(src_cfg, ad_filter=ad_filter))
             except TypeError:
@@ -98,6 +112,77 @@ class BaseCollector(ABC):
     def cutoff_time(self) -> datetime:
         """Items older than this are filtered out."""
         return datetime.now(timezone.utc) - timedelta(hours=self.lookback_hours)
+
+    async def _request_with_retry(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        *,
+        method: str = "GET",
+        max_retries: int = 3,
+        base_delay: float = 1.0,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        """Send an HTTP request with exponential-backoff retry on transient errors.
+
+        Retries on:
+        - 5xx server errors
+        - 429 Too Many Requests
+        - httpx.TransportError (TimeoutException, RemoteProtocolError, ConnectError, etc.)
+
+        Does NOT retry on 4xx (except 429) — raises immediately.
+
+        Args:
+            client: The httpx.AsyncClient to use.
+            url: Request URL.
+            method: HTTP method (default "GET").
+            max_retries: Maximum number of retries (default 3).
+            base_delay: Base delay in seconds for exponential backoff.
+            **kwargs: Additional arguments passed to client.request().
+
+        Returns:
+            httpx.Response on success.
+
+        Raises:
+            httpx.HTTPStatusError: On non-retryable 4xx or after retries exhausted.
+            httpx.TransportError: If all retries fail with transport errors.
+        """
+        last_exception: Exception | None = None
+        for attempt in range(max_retries + 1):
+            try:
+                resp = await client.request(method, url, **kwargs)
+                if resp.status_code >= 500 or resp.status_code == 429:
+                    last_exception = httpx.HTTPStatusError(
+                        f"{resp.status_code}",
+                        request=resp.request,
+                        response=resp,
+                    )
+                    if attempt < max_retries:
+                        delay = base_delay * (2 ** attempt)
+                        logger.warning(
+                            "[%s] HTTP %d from %s, retrying in %.1fs (attempt %d/%d)",
+                            self.source_name, resp.status_code, url,
+                            delay, attempt + 1, max_retries,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    # Retries exhausted
+                    resp.raise_for_status()
+                return resp
+            except httpx.TransportError as exc:
+                last_exception = exc
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(
+                        "[%s] %s from %s, retrying in %.1fs (attempt %d/%d)",
+                        self.source_name, type(exc).__name__, url,
+                        delay, attempt + 1, max_retries,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+        # Should not reach here, but satisfy type checker
+        raise last_exception  # type: ignore[misc]
 
     @abstractmethod
     async def collect(self) -> list[ContentItem]:

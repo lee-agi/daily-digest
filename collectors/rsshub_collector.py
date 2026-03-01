@@ -92,6 +92,8 @@ class RSSHubCollector(BaseCollector):
         """Fetch and parse RSS/Atom feed."""
         items = []
         urls = self._build_feed_urls()
+        if not urls:
+            return []
 
         # Use explicit transport to fully bypass system proxy env vars
         # (http_proxy). httpx[socks] + proxy=None still routes through
@@ -100,9 +102,21 @@ class RSSHubCollector(BaseCollector):
         async with httpx.AsyncClient(
             timeout=30, follow_redirects=True, transport=transport,
         ) as client:
+            # Quick reachability check for RSSHub (HEAD, 3s timeout)
+            try:
+                probe = await client.head(
+                    self.rsshub_base, timeout=3.0,
+                )
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                logger.warning(
+                    "[%s] RSSHub at %s unreachable, skipping",
+                    self.source_name, self.rsshub_base,
+                )
+                return []
+
             for url in urls:
                 try:
-                    resp = await client.get(url)
+                    resp = await self._request_with_retry(client, url)
                     resp.raise_for_status()
                     feed = feedparser.parse(resp.text)
 
@@ -157,7 +171,7 @@ class XiaoyuzhouCollector(BaseCollector):
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             for feed_url in self.feeds:
                 try:
-                    resp = await client.get(feed_url)
+                    resp = await self._request_with_retry(client, feed_url)
                     resp.raise_for_status()
                     feed = feedparser.parse(resp.text)
                 except httpx.HTTPError as e:
@@ -202,6 +216,15 @@ class XiaoyuzhouCollector(BaseCollector):
 
         duration = entry.get("itunes_duration", "")
 
+        # Parse enclosure file size (bytes)
+        file_size_bytes = 0
+        enclosures = entry.get("enclosures", [])
+        if enclosures:
+            try:
+                file_size_bytes = int(enclosures[0].get("length", 0))
+            except (ValueError, TypeError, IndexError):
+                pass
+
         return ContentItem(
             source="xiaoyuzhou",
             source_type=SourceType.RSS,
@@ -212,7 +235,11 @@ class XiaoyuzhouCollector(BaseCollector):
             published_at=published,
             score=0.0,
             tags=["podcast"],
-            extra={"podcast": podcast_title, "duration": duration},
+            extra={
+                "podcast": podcast_title,
+                "duration": duration,
+                "file_size_bytes": file_size_bytes,
+            },
         )
 
 

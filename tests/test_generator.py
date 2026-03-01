@@ -280,8 +280,8 @@ class TestHardcodedModel:
 
 class TestReadTimeout:
     @pytest.mark.asyncio
-    async def test_read_timeout_is_120s(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Read timeout must be 120s to enforce TTFT limit."""
+    async def test_read_timeout_is_600s(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Read timeout must be 600s for SSE streaming with long inference."""
         monkeypatch.setenv("AZURE_OPENAI_API_KEY", "test-key")
         monkeypatch.setenv("AZURE_OPENAI_BASE_URL", "https://env-base.openai.azure.com/openai")
 
@@ -302,7 +302,7 @@ class TestReadTimeout:
 
         assert len(captured_timeouts) >= 1
         t = captured_timeouts[0]
-        assert t.read == 120.0
+        assert t.read == 600.0
 
 
 # ---------------------------------------------------------------------------
