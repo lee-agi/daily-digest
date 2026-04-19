@@ -340,6 +340,7 @@ def _has_token() -> bool:
     return bool(os.environ.get("PRODUCTHUNT_API_TOKEN"))
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(not _has_token(), reason="PRODUCTHUNT_API_TOKEN not set")
 @pytest.mark.asyncio
 async def test_live_collect_top10():
@@ -360,6 +361,7 @@ async def test_live_collect_top10():
         assert item.published_at.tzinfo is not None
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(not _has_token(), reason="PRODUCTHUNT_API_TOKEN not set")
 @pytest.mark.asyncio
 async def test_live_items_have_votes():

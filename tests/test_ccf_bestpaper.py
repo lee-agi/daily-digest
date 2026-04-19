@@ -57,6 +57,8 @@ class TestCcfBestPaperRegistration:
 class TestCcfDeadlinesYAML:
     """Test ccf-deadlines GitHub YAML fetch (real network call)."""
 
+    pytestmark = pytest.mark.integration
+
     @pytest.mark.asyncio
     async def test_fetch_conference_metadata(self):
         """Fetch real YAML files from ccf-deadlines repo."""
@@ -97,6 +99,8 @@ class TestCcfDeadlinesYAML:
 
 class TestOpenReviewAPI:
     """Test OpenReview API real calls."""
+
+    pytestmark = pytest.mark.integration
 
     @pytest.mark.asyncio
     async def test_iclr_2026_orals(self):
@@ -176,6 +180,8 @@ class TestOpenReviewAPI:
 class TestContentItemCompleteness:
     """Verify ContentItem fields from OpenReview data."""
 
+    pytestmark = pytest.mark.integration
+
     @pytest.mark.asyncio
     async def test_field_completeness(self):
         """Each item should have all required fields populated."""
@@ -203,6 +209,8 @@ class TestContentItemCompleteness:
 
 class TestAAAIAwards:
     """Test AAAI awards page scraping (real HTTP)."""
+
+    pytestmark = pytest.mark.integration
 
     @pytest.mark.asyncio
     async def test_fetch_aaai_awards_2026(self):
@@ -260,6 +268,8 @@ class TestAAAIAwards:
 class TestCVPRAwards:
     """Test CVPR best papers page scraping (real HTTP)."""
 
+    pytestmark = pytest.mark.integration
+
     @pytest.mark.asyncio
     async def test_fetch_cvpr_awards_2025(self):
         """Fetch CVPR 2025 best papers from real page."""
@@ -298,6 +308,8 @@ class TestCVPRAwards:
 
 class TestACLAwards:
     """Test ACL best papers page scraping (real HTTP)."""
+
+    pytestmark = pytest.mark.integration
 
     @pytest.mark.asyncio
     async def test_fetch_acl_awards_2024(self):
@@ -358,6 +370,7 @@ class TestIJCAIStub:
 class TestWebsiteAwardsDispatcher:
     """Test _fetch_website_awards dispatches correctly."""
 
+    @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_dispatches_aaai(self):
         """AAAI should be dispatched to _fetch_aaai_awards."""
@@ -365,6 +378,7 @@ class TestWebsiteAwardsDispatcher:
         items = await collector._fetch_website_awards("AAAI", 2026)
         assert len(items) > 0, "AAAI dispatch should return items"
 
+    @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_dispatches_cvpr(self):
         """CVPR should be dispatched to _fetch_cvpr_awards."""
@@ -372,6 +386,7 @@ class TestWebsiteAwardsDispatcher:
         items = await collector._fetch_website_awards("CVPR", 2025)
         assert len(items) > 0, "CVPR dispatch should return items"
 
+    @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_dispatches_acl(self):
         """ACL should be dispatched to _fetch_acl_awards."""
@@ -492,6 +507,8 @@ class TestExtractAvgRating:
 class TestRatingFiltering:
     """Test rating-based filtering with real OpenReview API calls."""
 
+    pytestmark = pytest.mark.integration
+
     @pytest.mark.asyncio
     async def test_iclr_2026_orals_have_ratings(self):
         """Most ICLR 2026 Oral papers should have reviewer ratings."""
@@ -596,6 +613,8 @@ class TestRatingFiltering:
 
 class TestEndToEnd:
     """End-to-end test via collector.run()."""
+
+    pytestmark = pytest.mark.integration
 
     @pytest.mark.asyncio
     async def test_run(self):

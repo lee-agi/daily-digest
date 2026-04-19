@@ -38,6 +38,8 @@ class TestBlogCollectorRegistration:
 class TestOpenAIBlogCollector:
     """Test OpenAI blog collector with real RSS feed."""
 
+    pytestmark = pytest.mark.integration
+
     @pytest.mark.asyncio
     async def test_real_rss_fetch(self):
         """Fetch actual blog posts from OpenAI RSS feed."""
@@ -74,6 +76,8 @@ class TestOpenAIBlogCollector:
 
 class TestGoogleBlogCollector:
     """Test Google Blog collector with real RSS feeds."""
+
+    pytestmark = pytest.mark.integration
 
     @pytest.mark.asyncio
     async def test_real_rss_fetch(self):
@@ -116,6 +120,7 @@ class TestGoogleBlogCollector:
 class TestAnthropicBlogCollector:
     """Test Anthropic blog collector with real HTTP scraping."""
 
+    @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_real_http_scrape(self):
         """Scrape actual blog posts from Anthropic website."""
@@ -132,6 +137,7 @@ class TestAnthropicBlogCollector:
         # Anthropic should have some blog posts
         assert len(result.items) > 0, "Expected at least 1 blog post from Anthropic"
 
+    @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_engineering_and_research_coverage(self):
         """Verify both /engineering and /research pages are scraped."""
@@ -152,6 +158,7 @@ class TestAnthropicBlogCollector:
             f"Expected posts from /engineering or /research, got URLs: {urls[:5]}"
         )
 
+    @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_field_completeness(self):
         """Verify ContentItem fields are properly populated."""

@@ -105,6 +105,7 @@ class TestHuggingFaceUpvotes:
 class TestHuggingFaceLiveAPI:
     """Integration test: actually hit the HuggingFace API."""
 
+    @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_live_collect_returns_items(self, hf_config):
         """With threshold=0, we should get some papers from the live API."""

@@ -1,0 +1,24 @@
+{
+  "generated_at": "2026-04-12T16:30:00+08:00",
+  "git_commit": "e1d7b0b6490ed2c1902c24aece1d2dcc9bc76d86",
+  "project_name": "daily-digest",
+  "project_type": "Python CLI Pipeline",
+  "tech_stack": ["Python 3.11", "httpx", "pydantic-v2", "feedparser", "beautifulsoup4", "sqlite3", "pytest-asyncio", "Azure OpenAI"],
+  "modules_analyzed": ["collectors", "aggregator", "report", "orchestrator", "enricher"],
+  "output_files": [
+    ".claude/project-context.local.md",
+    ".claude/skills/INDEX.md",
+    ".claude/skills/quickstart.md",
+    ".claude/skills/architecture.md",
+    ".claude/skills/config.md",
+    ".claude/skills/development.md",
+    ".claude/skills/faq.md",
+    ".claude/skills/modules/collectors.md",
+    ".claude/skills/modules/aggregator.md",
+    ".claude/skills/modules/report.md",
+    ".claude/skills/modules/orchestrator.md",
+    ".claude/skills/modules/enricher.md"
+  ],
+  "skills_dir": ".claude/skills/",
+  "version": "2.0"
+}

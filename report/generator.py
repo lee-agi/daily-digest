@@ -129,13 +129,14 @@ async def generate_digest_report(
         },
     }
 
-    stats_section = "\n\n---\n\n## Platform Statistics\n\n"
+    stats_section = "## Platform Statistics\n\n"
     stats_section += "| Platform | Items |\n|----------|-------|\n"
     for source, count in sorted(stats["sources"].items()):
         stats_section += f"| {source} | {count} |\n"
     stats_section += f"| **Total** | **{stats['total_items']}** |\n"
+    stats_section += "\n---\n\n"
 
-    full_report = header + full_markdown + stats_section
+    full_report = header + stats_section + full_markdown
 
     return DigestReport(
         date=target_date,

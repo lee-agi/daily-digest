@@ -9,3 +9,30 @@ __pycache__/
 *.pyc
 .pytest_cache/
 worktree/
+
+# ctags
+tags
+TAGS
+
+# Python
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.ruff_cache/
+
+# Env / secrets
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~

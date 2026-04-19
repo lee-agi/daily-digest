@@ -95,6 +95,7 @@ class TestCollectorRegistration:
 class TestHuggingFaceCollector:
     """Test HuggingFace collector with real API call."""
 
+    @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_real_api_call(self):
         """Fetch actual daily papers from HuggingFace API."""
@@ -117,6 +118,7 @@ class TestHuggingFaceCollector:
 class TestGitHubCollector:
     """Test GitHub collector with real API call (no auth required for search)."""
 
+    @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_trending_no_auth(self):
         """Fetch trending repos without auth token."""
@@ -139,6 +141,7 @@ class TestGitHubCollector:
 class TestRedditCollector:
     """Test Reddit collector with public JSON API (no OAuth required)."""
 
+    @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_public_api(self):
         """Fetch hot posts from a subreddit via public API."""

@@ -37,6 +37,8 @@ class TestCollectorImport:
 
 
 class TestCollectPipeline:
+    pytestmark = pytest.mark.integration
+
     @pytest.mark.asyncio
     async def test_collect_single_source(self):
         """Test collect pipeline with HuggingFace (most reliable, no auth)."""
