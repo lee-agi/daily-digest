@@ -19,4 +19,6 @@ eval "$(grep '^export AZURE_OPENAI' ~/.bashrc 2>/dev/null || true)"
 
 MODE="${1:---full}"
 shift 2>/dev/null || true
-exec .venv/bin/python orchestrator.py "$MODE" "$@" 2>&1
+# --no-enrich by default: main pipeline runs fast without enrichment blocking.
+# Run enrichment separately: python orchestrator.py --enrich-only
+exec .venv/bin/python orchestrator.py "$MODE" --no-enrich "$@" 2>&1

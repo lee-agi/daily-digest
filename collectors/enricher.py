@@ -28,7 +28,7 @@ class EnrichmentConfig:
     """Configuration for content enrichment."""
 
     enabled: bool = False
-    timeout_seconds: int = 180
+    timeout_seconds: int = 300
     large_download_minutes: int = 30
     content_max_chars: int = 3000
     article_auto_threshold: int = 5000
@@ -40,6 +40,11 @@ class EnrichmentConfig:
     podcast_top_n: int = 3
     article_top_n: int = 10
 
+    # Per-type timeout (seconds)
+    article_timeout: int = 30
+    youtube_timeout: int = 600
+    podcast_timeout: int = 180
+
     @classmethod
     def from_config(cls, cfg: dict[str, Any]) -> EnrichmentConfig:
         """Build from the ``enrichment`` section of config.yaml."""
@@ -47,9 +52,10 @@ class EnrichmentConfig:
         yt = sources.get("youtube", {})
         pod = sources.get("apple_podcast", {})
         art = sources.get("articles", {})
+        xiao = sources.get("xiaoyuzhou", {})
         return cls(
             enabled=cfg.get("enabled", False),
-            timeout_seconds=cfg.get("timeout_seconds", 180),
+            timeout_seconds=cfg.get("timeout_seconds", 300),
             large_download_minutes=cfg.get("large_download_minutes", 30),
             content_max_chars=cfg.get("content_max_chars", 3000),
             article_auto_threshold=cfg.get("article_auto_threshold", 5000),
@@ -60,6 +66,9 @@ class EnrichmentConfig:
             youtube_min_engagement_rate=yt.get("min_engagement_rate", 0.0),
             podcast_top_n=pod.get("top_n", 3),
             article_top_n=art.get("top_n", 10),
+            article_timeout=art.get("timeout", 30),
+            youtube_timeout=yt.get("timeout", 600),
+            podcast_timeout=pod.get("timeout", xiao.get("timeout", 180)),
         )
 
 
@@ -141,10 +150,14 @@ class ContentEnricher:
         env.setdefault(
             "AZURE_OPENAI_SUMMARY_DEPLOYMENT", "llab-gpt-5-pro"
         )
-        env.setdefault(
-            "ANY2SUMMARY_YTDLP_COOKIES",
-            str(Path.home() / ".cache" / "any2summary" / "cookies.txt"),
-        )
+        cookies_path = Path.home() / ".cache" / "any2summary" / "cookies.txt"
+        env.setdefault("ANY2SUMMARY_YTDLP_COOKIES", str(cookies_path))
+        if not cookies_path.exists():
+            logger.warning(
+                "[enricher] YouTube cookies file not found: %s "
+                "(yt-dlp may fail for age-restricted videos)",
+                cookies_path,
+            )
         return env
 
     def _resolve_python(self) -> str:
@@ -177,8 +190,9 @@ class ContentEnricher:
             cmd.extend(["--article-summary-prompt-file", str(article_prompt)])
         return cmd
 
-    def call_any2summary(self, url: str) -> dict[str, Any] | None:
+    def call_any2summary(self, url: str, timeout: int | None = None) -> dict[str, Any] | None:
         """Call any2summary CLI and return parsed JSON payload, or None on failure."""
+        effective_timeout = timeout or self.config.timeout_seconds
         cmd = self._build_cmd(url)
         env = self._build_env()
 
@@ -189,7 +203,7 @@ class ContentEnricher:
                 cwd=str(self._any2summary_dir),
                 capture_output=True,
                 text=True,
-                timeout=self.config.timeout_seconds,
+                timeout=effective_timeout,
             )
             if result.returncode == 0 and result.stdout.strip():
                 return json.loads(result.stdout)
@@ -211,15 +225,24 @@ class ContentEnricher:
     # Item enrichment
     # ------------------------------------------------------------------
 
-    def enrich_item(self, item: ContentItem) -> bool:
+    def enrich_item(self, item: ContentItem, timeout: int | None = None) -> bool:
         """Enrich a single ContentItem via any2summary.
 
         Returns True if the item content was updated.
+        For podcast sources, prefers ``extra.audio_url`` over the webpage URL
+        so that any2summary downloads audio directly instead of scraping.
         """
         if not item.url:
             return False
 
-        data = self.call_any2summary(item.url)
+        # Podcast: prefer audio_url (direct audio file) over webpage URL
+        url = item.url
+        if item.source in ("apple_podcast", "xiaoyuzhou"):
+            audio_url = item.extra.get("audio_url")
+            if audio_url:
+                url = audio_url
+
+        data = self.call_any2summary(url, timeout=timeout)
         if data is None:
             return False
 
@@ -321,9 +344,10 @@ class ContentEnricher:
         Articles with content < article_auto_threshold chars are all selected.
         Remaining articles are selected by score up to article_top_n.
         """
+        # Only English sources — cn_tech_blog and baoyu_blog are excluded
+        # because they are RSS full-text and don't need enrichment.
         article_sources = {
-            "anthropic", "openai", "google_blog", "cn_tech_blog",
-            "baoyu_blog", "manual_urls",
+            "anthropic", "openai", "google_blog", "manual_urls",
         }
         article_items = [
             i for i in items
@@ -350,6 +374,7 @@ class ContentEnricher:
 
     def _enrich_with_circuit_breaker(
         self, items: list[ContentItem], category: str,
+        timeout: int | None = None,
     ) -> int:
         """Enrich items with circuit breaker — skip remaining after N consecutive failures."""
         consecutive_failures = 0
@@ -362,7 +387,7 @@ class ContentEnricher:
                     consecutive_failures, remaining, category,
                 )
                 break
-            if self.enrich_item(item):
+            if self.enrich_item(item, timeout=timeout):
                 consecutive_failures = 0
                 enriched_count += 1
             else:
@@ -385,7 +410,9 @@ class ContentEnricher:
 
         # Articles
         article_items = self.select_article_items(all_items)
-        enriched_count = self._enrich_with_circuit_breaker(article_items, "article")
+        enriched_count = self._enrich_with_circuit_breaker(
+            article_items, "article", timeout=self.config.article_timeout,
+        )
         if article_items:
             logger.info(
                 "[enricher] Articles: %d/%d enriched",
@@ -394,7 +421,9 @@ class ContentEnricher:
 
         # YouTube
         yt_enrichable, _ = self.select_youtube_items(all_items)
-        yt_count = self._enrich_with_circuit_breaker(yt_enrichable, "youtube")
+        yt_count = self._enrich_with_circuit_breaker(
+            yt_enrichable, "youtube", timeout=self.config.youtube_timeout,
+        )
         if yt_enrichable:
             logger.info(
                 "[enricher] YouTube: %d/%d enriched",
@@ -403,7 +432,9 @@ class ContentEnricher:
 
         # Podcasts
         pod_enrichable, pod_manual = self.select_podcast_items(all_items)
-        pod_count = self._enrich_with_circuit_breaker(pod_enrichable, "podcast")
+        pod_count = self._enrich_with_circuit_breaker(
+            pod_enrichable, "podcast", timeout=self.config.podcast_timeout,
+        )
         manual_suggestions.extend(pod_manual)
         if pod_enrichable or pod_manual:
             logger.info(

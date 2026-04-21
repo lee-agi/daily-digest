@@ -6,7 +6,15 @@ Re-run the daily digest pipeline: collect items from the past $N hours across al
 
 ## Instructions
 
-Run the following command via Bash:
+Before running, show the user the resolved CLI parameters in a concise block, for example:
+```
+📋 digest-run 参数:
+  --lookback-hours  24        (N=$N)
+  --dry-run         true      (PUSH=$PUSH → dry-run)
+  --no-enrich       true      (default)
+```
+
+Then run the following command via Bash:
 
 ```bash
 bash scripts/run.sh --full {{ARGS}} --lookback-hours {{N}}

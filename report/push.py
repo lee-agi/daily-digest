@@ -1,9 +1,10 @@
-"""Distribution: push digest to RSS Worker and Feishu."""
+"""Distribution: push digest to RSS Worker, Feishu, and Weixin."""
 
 from __future__ import annotations
 
 import logging
 import os
+import subprocess
 from datetime import timedelta, timezone
 
 import httpx
@@ -83,6 +84,54 @@ async def push_items_batch(
             return False
 
 
+def push_to_weixin(report: DigestReport, config: dict) -> bool:
+    """Push digest report to Weixin via OpenClaw channel delivery."""
+    wx_config = config.get("distribution", {}).get("weixin", {})
+    if not wx_config.get("enabled", False):
+        logger.info("Weixin push disabled")
+        return False
+
+    channel = wx_config.get("channel", "openclaw-weixin")
+    to = wx_config.get("to", "")
+    account_id = wx_config.get("account_id", "")
+    if not to or not account_id:
+        logger.error("Weixin target or account_id not configured")
+        return False
+
+    text = report.full_markdown
+    if len(text) > 12000:
+        text = text[:12000] + "\n\n[truncated]"
+
+    try:
+        proc = subprocess.run(
+            [
+                "openclaw",
+                "message",
+                "send",
+                "--json",
+                "--channel",
+                channel,
+                "--account",
+                account_id,
+                "--target",
+                to,
+                "--message",
+                text,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode == 0:
+            logger.info("Pushed to Weixin via OpenClaw channel: %s", to)
+            return True
+        logger.error("Weixin push failed: code=%s stdout=%s stderr=%s", proc.returncode, proc.stdout, proc.stderr)
+        return False
+    except Exception as e:
+        logger.error("Weixin push exception: %s", e)
+        return False
+
+
 async def push_report(report: DigestReport, config: dict) -> None:
     """Push report to all enabled distribution channels."""
     results = {}
@@ -95,6 +144,9 @@ async def push_report(report: DigestReport, config: dict) -> None:
     if feishu_config.get("enabled", False):
         logger.info("Feishu delivery will be handled by OpenClaw agent")
         results["feishu"] = True  # Placeholder
+
+    # Weixin - direct via OpenClaw channel
+    results["weixin"] = push_to_weixin(report, config)
 
     success_count = sum(1 for v in results.values() if v)
     logger.info("Push results: %d/%d channels succeeded", success_count, len(results))

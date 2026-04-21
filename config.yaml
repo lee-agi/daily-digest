@@ -50,6 +50,9 @@ sources:
       - OpenAI
       - productivity
       - programming
+      - hardware
+      - chipdesign
+      - technology
     # client_id/secret: from env REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET
 
   youtube:
@@ -245,7 +248,7 @@ sources:
 # Content enrichment via any2summary
 enrichment:
   enabled: true
-  timeout_seconds: 180
+  timeout_seconds: 300
   large_download_minutes: 30
   article_auto_threshold: 5000   # Articles with content < 5k chars are auto-enriched
   content_max_chars: 3000        # ContentItem.content truncation length
@@ -254,16 +257,20 @@ enrichment:
     youtube:
       enabled: true
       top_n: 5
+      timeout: 600       # No subtitles → download audio + transcribe + summarize
       # Uses YOUTUBE_DATA_API_KEY env var for engagement rate
     apple_podcast:
       enabled: true
       top_n: 3
+      timeout: 180       # Audio download + transcribe + summarize
     xiaoyuzhou:
       enabled: true
       top_n: 3
+      timeout: 180       # Audio download + transcribe + summarize
     articles:
       enabled: true
-      top_n: 10    # Beyond the auto-threshold articles
+      top_n: 10          # Beyond the auto-threshold articles
+      timeout: 30        # Plain text scrape + summarize
 
 # Ad content filtering
 ad_filter:
@@ -299,3 +306,8 @@ distribution:
   feishu:
     enabled: true
     # Uses OpenClaw agent channel
+  weixin:
+    enabled: true
+    channel: openclaw-weixin
+    to: o9cq802DYuyhrHBAn7SHotXRWxlE@im.wechat
+    account_id: 17f8c0a8ad14-im-bot

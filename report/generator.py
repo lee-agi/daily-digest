@@ -105,8 +105,8 @@ async def generate_digest_report(
         categories=", ".join(categories),
     )
 
-    # Call LLM (placeholder - will be implemented in Phase 6)
-    full_markdown = await _call_llm(prompt, config)
+    # Call LLM with structured fallback data for when all models fail
+    full_markdown, used_fallback = await _call_llm(prompt, config, categorized_for_llm)
 
     # Build report header
     header = f"""# Daily Digest - {target_date}
@@ -137,6 +137,10 @@ async def generate_digest_report(
     stats_section += "\n---\n\n"
 
     full_report = header + stats_section + full_markdown
+
+    # Tag fallback/raw reports so orchestrator can distinguish them from broken truncation.
+    if used_fallback:
+        full_report = "<!-- RAW_FALLBACK_REPORT -->\n" + full_report
 
     return DigestReport(
         date=target_date,
@@ -171,24 +175,121 @@ def _load_openclaw_azure_config() -> dict[str, str]:
         return {"base_url": "", "model": ""}
 
 
-async def _call_llm(prompt: str, config: dict) -> str:
-    """Call LLM for summary generation via Azure OpenAI Responses API (streaming).
 
-    Uses streaming mode to keep the connection alive during long inference,
-    preventing proxy/load-balancer idle-timeout disconnects.
+# Model fallback chain: (model_name, max_attempts)
+# If primary model fails all attempts, try next model before falling back to template.
+MODELS: list[tuple[str, int]] = [
+    ("llab-gpt-5.2-codex", 3),
+    ("llab-gpt-5-mini", 2),
+]
+
+# Progressive attempt configs: streaming → streaming (longer timeout) → non-streaming
+# Non-streaming bypasses Azure proxy idle timeout during model TTFT thinking.
+_ATTEMPT_CONFIGS = [
+    {"stream": True,  "read_timeout": 600.0},   # Attempt 1: default streaming
+    {"stream": True,  "read_timeout": 900.0},   # Attempt 2: longer timeout
+    {"stream": False, "read_timeout": 900.0},   # Attempt 3+: non-streaming fallback
+]
+
+# LLM refusal detection patterns
+_REFUSAL_PATTERNS = [
+    "i'm sorry",
+    "i cannot assist",
+    "i can't assist",
+    "i'm not able to",
+    "i apologize, but",
+    "as an ai",
+    "i cannot help with",
+    "i'm unable to",
+]
+
+
+def is_truncated_report(text: str) -> bool:
+    """Heuristic guard for obviously cut-off reports.
+
+    We only want to catch hard failures like:
+    - unfinished emphasis/code markers
+    - text ending mid-title/mid-sentence without closing sections
+    - missing stats tail that every normal report appends
+
+    Keep this conservative: false negatives are better than blocking good reports.
+    """
+    if not text:
+        return True
+
+    stripped = text.rstrip()
+
+    # Explicitly allow structured raw fallback reports.
+    if "<!-- RAW_FALLBACK_REPORT -->" in stripped:
+        return False
+
+    # All normal reports end with the platform statistics tail.
+    if "## Platform Statistics" not in stripped:
+        return True
+
+    # Unbalanced markdown fences / emphasis markers near EOF usually means truncation.
+    if stripped.count("```") % 2 != 0:
+        return True
+    if stripped.count("**") % 2 != 0:
+        return True
+
+    tail = stripped[-300:]
+
+    # Clearly broken endings we've observed in practice.
+    broken_suffixes = (
+        "**",
+        "*",
+        "`",
+        "[",
+        "(",
+        "{",
+        "\"",
+        "“",
+        "—",
+        ":",
+    )
+    if tail.endswith(broken_suffixes):
+        return True
+
+    # If the file ends with an alnum fragment and never reaches stats, it's suspect.
+    last_line = stripped.splitlines()[-1].strip()
+    if last_line and "| **Total** |" not in stripped and last_line[-1].isalnum():
+        return True
+
+    return False
+
+
+def _is_refusal(text: str) -> bool:
+    """Detect LLM refusal/safety responses.
+
+    Real digest reports are thousands of chars; refusals are short boilerplate.
+    """
+    if len(text) > 500:
+        return False
+    text_lower = text.lower()
+    return any(p in text_lower for p in _REFUSAL_PATTERNS)
+
+
+async def _call_llm(
+    prompt: str,
+    config: dict,
+    categorized_for_llm: dict[str, list[dict]] | None = None,
+) -> tuple[str, bool]:
+    """Call LLM for summary generation with model fallback chain.
+
+    Tries each model in MODELS list. If all attempts for a model fail,
+    tries the next model. Falls back to structured raw-data report if all models fail.
 
     Falls back to OpenClaw models.json config if env vars are missing.
-    Falls back to placeholder template if API is not configured.
     """
     import os
-    import httpx
 
     api_key = os.environ.get("AZURE_OPENAI_API_KEY", "")
     base_url = (os.environ.get("AZURE_OPENAI_BASE_URL")
                 or os.environ.get("AZURE_OPENAI_ENDPOINT", ""))
     api_version = (os.environ.get("AZURE_OPENAI_API_VERSION") or "2025-03-01-preview")
 
-    # Always load OpenClaw config for model selection; base_url env var takes priority
+    # Always load OpenClaw config; base_url env var takes priority
     openclaw_cfg = _load_openclaw_azure_config()
     if not base_url:
         base_url = openclaw_cfg.get("base_url", "")
@@ -196,31 +297,49 @@ async def _call_llm(prompt: str, config: dict) -> str:
             logger.info("Using base_url from OpenClaw models.json")
 
     if not api_key or not base_url:
-        logger.warning("Azure OpenAI not configured. Using fallback template.")
-        return _generate_fallback_report(prompt)
+        logger.warning("Azure OpenAI not configured. Using fallback report.")
+        return _generate_fallback_report(categorized_for_llm), True
 
     # Ensure base_url ends with /openai for Responses API
     if not base_url.endswith("/openai"):
         base_url = base_url.rstrip("/") + "/openai"
 
-    # Use Responses API endpoint
     url = f"{base_url}/responses?api-version={api_version}"
 
-    # Hard-coded model — env vars proved unreliable (llab-gpt-5-pro mismatch)
-    model = "llab-gpt-5.2-codex"
+    for model, max_attempts in MODELS:
+        result = await _call_llm_with_model(
+            prompt, url, api_key, model, max_attempts,
+        )
+        if result is not None:
+            return result, False
+        logger.warning("Model %s exhausted all %d attempts, trying next...", model, max_attempts)
 
-    payload = {
-        "model": model,
-        "input": prompt,
-        "max_output_tokens": 16000,
-        "stream": True,  # streaming keeps connection alive, prevents idle-timeout drops
-    }
+    logger.error("All models failed, using fallback report with raw data.")
+    return _generate_fallback_report(categorized_for_llm), True
+
+
+async def _call_llm_with_model(
+    prompt: str,
+    url: str,
+    api_key: str,
+    model: str,
+    max_attempts: int,
+) -> str | None:
+    """Try a single model up to max_attempts times with progressive degradation.
+
+    Attempt strategy (from _ATTEMPT_CONFIGS):
+    1. Streaming with 600s read timeout
+    2. Streaming with 900s read timeout
+    3+. Non-streaming with 900s read timeout (bypasses proxy idle timeout)
+
+    Returns the generated text on success, or None if all attempts fail.
+    """
+    import httpx
+
     headers = {
         "api-key": api_key,
         "Content-Type": "application/json",
     }
-    # 600s read timeout for streaming — tokens arrive continuously so no idle disconnect.
-    timeout = httpx.Timeout(connect=30.0, read=600.0, write=60.0, pool=30.0)
     # Bypass proxy — Azure OpenAI is directly reachable and proxies
     # introduce idle-timeout disconnects during long model thinking.
     transport = httpx.AsyncHTTPTransport()
@@ -229,42 +348,73 @@ async def _call_llm(prompt: str, config: dict) -> str:
         "Calling LLM: model=%s, url=%s, prompt_chars=%d", model, url, len(prompt)
     )
 
-    for attempt in range(3):
+    for attempt in range(max_attempts):
+        cfg = _ATTEMPT_CONFIGS[min(attempt, len(_ATTEMPT_CONFIGS) - 1)]
+        use_stream = cfg["stream"]
+        timeout = httpx.Timeout(
+            connect=30.0, read=cfg["read_timeout"], write=60.0, pool=30.0,
+        )
+        payload = {
+            "model": model,
+            "input": prompt,
+            "max_output_tokens": 16000,
+            "stream": use_stream,
+        }
+
         try:
             async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
-                async with client.stream("POST", url, json=payload, headers=headers) as resp:
+                if use_stream:
+                    async with client.stream("POST", url, json=payload, headers=headers) as resp:
+                        resp.raise_for_status()
+                        result = await _parse_sse_stream(resp)
+                else:
+                    logger.info(
+                        "Using non-streaming mode (model=%s, attempt %d/%d)",
+                        model, attempt + 1, max_attempts,
+                    )
+                    resp = await client.post(url, json=payload, headers=headers)
                     resp.raise_for_status()
-                    result = await _parse_sse_stream(resp)
+                    data = resp.json()
+                    # Handle both sync and async .json() (e.g. in tests)
+                    if hasattr(data, "__await__"):
+                        data = await data
+                    result = _extract_response_text(data)
 
             if result:
-                logger.info("LLM summary generated: %d chars", len(result))
+                if _is_refusal(result):
+                    logger.warning(
+                        "LLM refusal detected (model=%s, %d chars): %.100s",
+                        model, len(result), result,
+                    )
+                    return None  # Trigger fallback to next model
+                logger.info("LLM summary generated: model=%s, %d chars", model, len(result))
                 return result
             else:
-                logger.warning("LLM returned empty response, using fallback")
-                return _generate_fallback_report(prompt)
+                logger.warning("LLM returned empty response (model=%s)", model)
+                return None
 
         except httpx.HTTPStatusError as e:
             logger.error(
-                "LLM API returned HTTP %d: %s", e.response.status_code, e,
+                "LLM API returned HTTP %d (model=%s): %s",
+                e.response.status_code, model, e,
             )
-            return _generate_fallback_report(prompt)
+            return None
         except httpx.TransportError as e:
-            if attempt < 2:
+            if attempt < max_attempts - 1:
                 wait = 3 * (attempt + 1)
                 logger.warning(
-                    "LLM request failed (attempt %d/3, %s), retrying in %ds: %s",
-                    attempt + 1, type(e).__name__, wait, e,
+                    "LLM request failed (model=%s, attempt %d/%d, %s), retrying in %ds: %s",
+                    model, attempt + 1, max_attempts, type(e).__name__, wait, e,
                 )
                 await asyncio.sleep(wait)
                 continue
             logger.error(
-                "LLM API call failed after 3 attempts (%s): %s",
-                type(e).__name__, e,
+                "LLM API call failed after %d attempts (model=%s, %s): %s",
+                max_attempts, model, type(e).__name__, e,
             )
-            return _generate_fallback_report(prompt)
+            return None
 
-    # Should not reach here, but satisfy type checker
-    return _generate_fallback_report(prompt)
+    return None
 
 
 def _extract_response_text(data: dict) -> str:
@@ -331,10 +481,31 @@ async def _parse_sse_stream(resp: object) -> str:
     return "".join(text_parts)
 
 
-def _generate_fallback_report(prompt: str) -> str:
-    """Generate a basic report without LLM when API is unavailable."""
-    return (
-        "## Summary\n\n"
-        "_LLM summary unavailable. Raw collected data saved in intermediate JSON._\n\n"
-        f"_Prompt prepared: {len(prompt)} chars for LLM processing._\n"
-    )
+def _generate_fallback_report(
+    categorized_for_llm: dict[str, list[dict]] | None = None,
+) -> str:
+    """Generate a structured report from raw data when LLM is unavailable."""
+    if not categorized_for_llm:
+        return "## Summary\n\n_LLM summary unavailable. No item data available._\n"
+
+    parts = ["## Summary (Raw Data \u2014 LLM Unavailable)\n"]
+    parts.append("> LLM \u6458\u8981\u751f\u6210\u5931\u8d25\uff0c\u4ee5\u4e0b\u4e3a\u6309\u5206\u7c7b\u6574\u7406\u7684\u539f\u59cb\u91c7\u96c6\u6570\u636e\u3002\n")
+
+    for category, items in categorized_for_llm.items():
+        if not items:
+            continue
+        parts.append(f"\n### {category} ({len(items)} items)\n")
+        for item in items[:30]:
+            title = item.get("title", "Untitled")
+            url = item.get("url", "")
+            source = item.get("source", "")
+            author = item.get("author", "")
+            content = item.get("content", "")[:150]
+            link = f"[{title}]({url})" if url else title
+            meta = " | ".join(filter(None, [author, source]))
+            parts.append(f"- **{link}**{f' \u2014 {meta}' if meta else ''}")
+            if content:
+                parts.append(f"  > {content}...")
+            parts.append("")
+
+    return "\n".join(parts)

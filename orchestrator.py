@@ -6,10 +6,13 @@ Usage:
     python orchestrator.py --summarize-and-push    # Phase 2: LLM summarize + distribute
     python orchestrator.py --full                  # Both phases in sequence
     python orchestrator.py --full --dry-run        # Full run without pushing
+    python orchestrator.py --full --no-enrich      # Full run, skip enrichment
+    python orchestrator.py --enrich-only           # Standalone enrichment on latest data
 
 Options:
     --date YYYY-MM-DD    Target date (default: today)
     --source NAME        Run only a specific source
+    --no-enrich          Skip content enrichment (even if config enables it)
     --dry-run            Don't push to RSS/Feishu
     --verbose            Debug logging
 """
@@ -168,6 +171,7 @@ async def run_collect(
     config: dict,
     target_date: str,
     source_filter: str | None = None,
+    ignore_seen: bool = False,
 ) -> list[CollectorResult]:
     """Phase 1: Run all enabled collectors and save intermediate JSON."""
     from collectors.base import CollectorRegistry
@@ -194,21 +198,26 @@ async def run_collect(
         *(c.run() for c in collectors)
     )
 
-    # Dedup against state DB
+    # Dedup against state DB unless explicitly disabled (useful for historical backfills)
     conn = get_connection()
     all_items: list[ContentItem] = []
     for result in results:
         if result.success and result.items:
-            unseen = filter_unseen(conn, result.items)
-            logger.info("[%s] %d unseen out of %d items",
-                        result.source, len(unseen), len(result.items))
-            result.items = unseen
-            all_items.extend(unseen)
+            if ignore_seen:
+                logger.info("[%s] ignore_seen=true, keeping all %d items",
+                            result.source, len(result.items))
+                all_items.extend(result.items)
+            else:
+                unseen = filter_unseen(conn, result.items)
+                logger.info("[%s] %d unseen out of %d items",
+                            result.source, len(unseen), len(result.items))
+                result.items = unseen
+                all_items.extend(unseen)
 
-    # Content enrichment phase
+    # Content enrichment phase (skipped when --no-enrich is active)
     manual_suggestions: list = []
     enrichment_cfg = config.get("enrichment", {})
-    if enrichment_cfg.get("enabled", False):
+    if enrichment_cfg.get("enabled", False) and not config.get("_no_enrich", False):
         from collectors.enricher import ContentEnricher, EnrichmentConfig
         ecfg = EnrichmentConfig.from_config(enrichment_cfg)
         enricher = ContentEnricher(ecfg)
@@ -238,7 +247,7 @@ async def run_summarize_and_push(
 ) -> None:
     """Phase 2: Load intermediate JSON, generate LLM summary, distribute."""
     candidates = sorted(
-        DATA_DIR.glob(f"collected-{target_date}*.json"),
+        [p for p in DATA_DIR.glob(f"collected-{target_date}*.json") if p.name.startswith(f"collected-{target_date}-")],
         key=lambda p: p.stat().st_mtime,
     )
     if not candidates:
@@ -258,6 +267,14 @@ async def run_summarize_and_push(
     # Generate report
     from report.generator import generate_digest_report
     report = await generate_digest_report(items, config, target_date)
+
+    # Refuse to save/push obviously truncated markdown.
+    # We saw cases where a broken/partial LLM response ended mid-sentence and still
+    # got written to disk + pushed to RSS. Guard before any external side effects.
+    from report.generator import is_truncated_report
+    if is_truncated_report(report.full_markdown):
+        logger.error("Generated report looks truncated; aborting save/push for %s", target_date)
+        sys.exit(2)
 
     # Save markdown report
     output_dir = Path(config["general"]["output_dir"]).expanduser()
@@ -284,6 +301,59 @@ async def run_summarize_and_push(
     logger.info("Marked %d items as seen after successful push", len(items))
 
 
+# Sources eligible for enrichment in --enrich-only mode
+_ENRICH_ONLY_SOURCES = {
+    "anthropic", "openai", "google_blog", "manual_urls",  # English articles
+    "youtube",
+    "xiaoyuzhou",
+    "apple_podcast",
+}
+
+
+async def run_enrich_only(config: dict, target_date: str) -> None:
+    """Standalone enrichment: load latest collected JSON, enrich, save result."""
+    candidates = sorted(
+        [p for p in DATA_DIR.glob(f"collected-{target_date}*.json") if p.name.startswith(f"collected-{target_date}-")],
+        key=lambda p: p.stat().st_mtime,
+    )
+    if not candidates:
+        logger.error("No collected data for %s. Run --collect-only or --full first.", target_date)
+        sys.exit(1)
+
+    intermediate_path = candidates[-1]
+    logger.info("Loading items from: %s", intermediate_path.name)
+
+    items_data = json.loads(intermediate_path.read_text())
+    all_items = [ContentItem.model_validate(d) for d in items_data]
+    logger.info("Loaded %d total items", len(all_items))
+
+    # Filter to enrichment-eligible sources only
+    filtered = [i for i in all_items if i.source in _ENRICH_ONLY_SOURCES]
+    logger.info("Filtered to %d enrichment-eligible items (from %d)",
+                len(filtered), len(all_items))
+
+    if not filtered:
+        logger.warning("No enrichment-eligible items found for %s", target_date)
+        return
+
+    enrichment_cfg = config.get("enrichment", {})
+    from collectors.enricher import ContentEnricher, EnrichmentConfig
+    ecfg = EnrichmentConfig.from_config(enrichment_cfg)
+    enricher = ContentEnricher(ecfg)
+    enriched_items, manual_suggestions = enricher.process_batch(filtered)
+
+    if manual_suggestions:
+        _save_manual_suggestions(target_date, manual_suggestions)
+
+    # Save enriched results
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%H%M")
+    enriched_path = DATA_DIR / f"enriched-{target_date}-{ts}.json"
+    enriched_data = [item.model_dump(mode="json") for item in enriched_items]
+    enriched_path.write_text(json.dumps(enriched_data, ensure_ascii=False, indent=2))
+    logger.info("Saved %d enriched items to %s", len(enriched_items), enriched_path)
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Daily Digest Orchestrator")
     mode_group = parser.add_mutually_exclusive_group(required=True)
@@ -293,6 +363,8 @@ async def main() -> None:
                             help="Only summarize and push (requires prior collect)")
     mode_group.add_argument("--full", action="store_true",
                             help="Collect + summarize + push")
+    mode_group.add_argument("--enrich-only", action="store_true",
+                            help="Only run content enrichment on latest collected data")
 
     parser.add_argument("--date", default=datetime.now().strftime("%Y-%m-%d"),
                         help="Target date (default: today)")
@@ -304,6 +376,12 @@ async def main() -> None:
     parser.add_argument("--lookback-hours", type=int, default=None,
                         dest="lookback_hours",
                         help="Override lookback_hours for all sources")
+    parser.add_argument("--no-enrich", action="store_true",
+                        dest="no_enrich",
+                        help="Disable content enrichment even if config enables it")
+    parser.add_argument("--ignore-seen", action="store_true",
+                        dest="ignore_seen",
+                        help="Skip seen-item filtering during collect (for historical backfills)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Don't push to RSS/Feishu")
     parser.add_argument("--verbose", action="store_true",
@@ -334,9 +412,20 @@ async def main() -> None:
     if args.inject_urls:
         _inject_urls(args.inject_urls)
 
+    # Propagate --no-enrich flag via config internal key
+    if args.no_enrich:
+        config["_no_enrich"] = True
+
     # Create run record
     run_id = str(uuid.uuid4())[:8]
-    phase = "collect" if args.collect_only else "summarize" if args.summarize_and_push else "full"
+    if args.enrich_only:
+        phase = "enrich"
+    elif args.collect_only:
+        phase = "collect"
+    elif args.summarize_and_push:
+        phase = "summarize"
+    else:
+        phase = "full"
     record = RunRecord(
         run_id=run_id,
         date=target_date,
@@ -348,12 +437,18 @@ async def main() -> None:
     save_run(conn, record)
 
     try:
-        if args.collect_only or args.full:
-            results = await run_collect(config, target_date, args.source)
-            record.collector_results = results
+        if args.enrich_only:
+            await run_enrich_only(config, target_date)
+        else:
+            if args.collect_only or args.full:
+                results = await run_collect(
+                    config, target_date, args.source,
+                    ignore_seen=args.ignore_seen,
+                )
+                record.collector_results = results
 
-        if args.summarize_and_push or args.full:
-            await run_summarize_and_push(config, target_date, args.dry_run)
+            if args.summarize_and_push or args.full:
+                await run_summarize_and_push(config, target_date, args.dry_run)
 
         record.status = "success"
     except Exception as e:

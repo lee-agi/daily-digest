@@ -1,6 +1,26 @@
 # Daily Digest - Multi-Source Daily Information Aggregator
 
 ## Version History
+- v0.18.1 (2026-03-01): Pipeline 分步执行 + Enrichment 优化 + LLM Refusal 防护
+  - **Pipeline 拆分**: `--no-enrich` 跳过 enrichment，`--enrich-only` 独立运行 enrichment
+  - `scripts/run.sh` 默认传 `--no-enrich`，cron 主 pipeline 不被 enrichment 阻塞
+  - `run_enrich_only()`: 从 collected JSON 加载，过滤可 enrich 源，输出 `enriched-{date}-{HHMM}.json`
+  - **Enrichment 优化**: per-type timeout (article=30s, youtube=600s, podcast=180s)
+  - Podcast 优先使用 `extra.audio_url` (enclosure href) 而非网页 URL
+  - 排除中文源 (`cn_tech_blog`, `baoyu_blog`) 的 article enrichment
+  - **LLM Refusal 检测**: `_is_refusal()` 检测短文本 refusal，触发模型降级
+  - **Fallback 报告结构化**: LLM 不可用时输出按分类的原始数据+链接（替代空模板）
+  - **Streaming 渐进降级**: attempt 1-2 streaming → attempt 3 non-streaming (绕过 Azure 代理层 TTFT 空闲超时)
+  - `_ATTEMPT_CONFIGS`: 逐次增加 read timeout (600→900s)，第3次切非流式
+  - 新增 19 个测试 (generator: 9, enricher: 10, orchestrator: 2)，383 tests passed
+- v0.18.0 (2026-03-01): LLM 模型降级链 + 网络重试扩展 + enrichment 超时调整
+  - **模型降级链**: `llab-gpt-5.2-codex` (3次) → `llab-gpt-5-mini` (2次) → fallback 模板
+  - 重构 `_call_llm()` 为调度层 + `_call_llm_with_model()` 单模型尝试逻辑
+  - `_request_with_retry()` 从 `httpx.TimeoutException` 扩展为 `httpx.TransportError` (覆盖 RemoteProtocolError/ConnectError/ReadError)
+  - Enrichment subprocess 超时 180s → 300s (`config.yaml` + `enricher.py` 默认值)
+  - YouTube cookies 缺失时 log warning 提示
+  - SSE 解析器增加 debug 级别逐行日志
+  - 新增 7 个测试 (generator: 3, base_collector: 4)，71 tests passed
 - v0.17.1 (2026-03-01): 本地文件名加时间戳 + `--lookback-hours` CLI 参数 + `/digest-run` skill
   - `collected-{date}.json` → `collected-{date}-{HHMM}.json`，同日多次执行不覆盖
   - `digest-{date}.md` → `digest-{date}-{HHMM}.md`，使用 `report.generated_at` 北京时间
@@ -14,12 +34,12 @@
   - `config.yaml` enrichment 重新启用（`enabled: true`）
   - 新增 2 个测试（circuit_breaker_skips + circuit_breaker_resets）
   - 超时链：subprocess 180s 外层安全网 → httpx 600s/30s 内层 → 正常 30-120s 完成
-- v0.16.1 (2026-02-28): 统一 --full 单触发，修复两阶段调度导致的条目丢失
-  - 合并 `run-collect.sh` + `run-summarize.sh` → `scripts/run.sh`（默认 `--full`）
-  - 卸载 launchd 06:30 `--collect-only` plist，改为 OpenClaw cron 07:00 单次 `--full`
+- v0.16.1 (2026-02-28): 统一脚本入口，修复两阶段调度里的 seen 标记问题
+  - 合并 `run-collect.sh` + `run-summarize.sh` → `scripts/run.sh`（支持 `--collect-only` / `--summarize-and-push` / `--full`）
+  - launchd 调度：06:30 `--collect-only`，07:00 `--summarize-and-push`
   - 禁用 enrichment（any2summary subprocess hang）
   - `mark_seen()` 从 `run_collect()` 移至 `run_summarize_and_push()` push 成功后，dry-run 不标记 seen
-  - 根因：两阶段调度中 `--collect-only` 将条目标记 seen，`--summarize-and-push` 再次 collect 时仅获取 ~8 items
+  - 根因：旧实现里 collect 阶段会提前标记 seen，导致 summary 阶段再次 collect 时仅获取 ~8 items
   - 350 tests passed, 3 skipped
 - v0.16.0 (2026-02-28): 全局重试机制 + 三源分页修复
   - `BaseCollector._request_with_retry()`: 共享指数退避重试（5xx/429/timeout），max_retries=3, base_delay=1s
@@ -130,7 +150,7 @@
 Multi-source daily digest pipeline that collects content from 19 platforms, deduplicates, filters by configurable thresholds, enriches high-quality items via any2summary, generates LLM-powered summaries, and distributes via RSS and Feishu.
 
 ### Key Components
-- **orchestrator.py**: Entry point with `--collect-only`, `--summarize-and-push`, `--full`, `--inject-url` modes
+- **orchestrator.py**: Entry point with `--collect-only`, `--summarize-and-push`, `--full`, `--enrich-only`, `--no-enrich`, `--inject-url` modes
 - **collectors/base.py**: `BaseCollector` ABC + `CollectorRegistry` with auto-registration via `__init_subclass__`; `_request_with_retry()` shared exponential backoff retry (5xx/429/timeout)
 - **collectors/enricher.py**: Content enrichment via any2summary (articles, YouTube, podcasts)
 - **collectors/manual_url_collector.py**: Manual URL injection + Mac Reminders T5T integration
@@ -171,9 +191,11 @@ Multi-source daily digest pipeline that collects content from 19 platforms, dedu
 3. The collector auto-registers via `__init_subclass__` — no other changes needed
 
 ### Triggering
-- **OpenClaw cron** (07:00 CST): `scripts/run.sh` → `orchestrator.py --full` (collect + summarize + push in single run)
+- **launchd collect** (06:30 CST): `scripts/run.sh --collect-only`
+- **launchd summarize** (07:00 CST): `scripts/run.sh --summarize-and-push`
 - Unified wrapper script handles env var loading (.env + ~/.secrets + ~/.bashrc Azure vars)
-- Usage: `scripts/run.sh [--collect-only | --summarize-and-push | --full] [extra args...]` (default: `--full`)
+- Usage: `scripts/run.sh [--collect-only | --summarize-and-push | --full] [extra args...]` (default: `--full --no-enrich`)
+- **Enrichment 单独执行**: `python orchestrator.py --enrich-only` (加载最新 collected JSON，仅 enrich 英文 Articles/YouTube/Podcast)
 
 ### Active Sources (as of v0.16.0)
 | Source | Status | Notes |
@@ -203,8 +225,8 @@ Multi-source daily digest pipeline that collects content from 19 platforms, dedu
 # Run all tests
 .venv/bin/python -m pytest tests/ -v
 
-# Dry run (collect + summarize, no push)
-.venv/bin/python orchestrator.py --full --dry-run
+# Dry run (collect + summarize, no push, no enrichment)
+.venv/bin/python orchestrator.py --full --dry-run --no-enrich
 
 # Dry run with custom lookback window (48 hours)
 .venv/bin/python orchestrator.py --full --dry-run --lookback-hours 48
@@ -214,6 +236,9 @@ Multi-source daily digest pipeline that collects content from 19 platforms, dedu
 
 # Inject URL and collect
 .venv/bin/python orchestrator.py --collect-only --inject-url "https://example.com/article" --source manual_urls
+
+# Standalone enrichment (on latest collected data)
+.venv/bin/python orchestrator.py --enrich-only
 ```
 
 ### Claude Code Skill

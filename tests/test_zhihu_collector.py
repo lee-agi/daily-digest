@@ -994,6 +994,69 @@ class TestPagination:
         assert len(items) >= 5
         assert call_count["n"] == 2
 
+    def test_question_null_no_crash(self, collector):
+        """Follow feed entry with 'question': null must not raise AttributeError."""
+        data = {
+            "data": [
+                {
+                    "type": "normal",
+                    "target": {
+                        "type": "answer",
+                        "id": 999,
+                        "question": None,  # API returns null
+                        "author": {"name": "作者X"},
+                        "voteup_count": 100,
+                        "favorite_count": 20,
+                        "excerpt": "摘要",
+                        "created_time": 1708700000,
+                    },
+                },
+                {
+                    "type": "normal",
+                    "target": {
+                        "type": "answer",
+                        "id": 222,
+                        "question": {"id": 333, "title": "正常问题"},
+                        "author": {"name": "作者Y"},
+                        "voteup_count": 200,
+                        "favorite_count": 30,
+                        "excerpt": "摘要2",
+                        "created_time": 1708700000,
+                    },
+                },
+            ],
+            "paging": {"is_end": True, "next": ""},
+        }
+        # Should not raise; the null-question entry is skipped
+        items = collector._parse_recommend_or_follow(data)
+        # Only the valid answer should be returned
+        assert len(items) == 1
+        assert items[0].title == "正常问题"
+
+    def test_question_empty_id_skipped(self, collector):
+        """Answer entry with empty question.id produces invalid URL and must be skipped."""
+        data = {
+            "data": [
+                {
+                    "type": "normal",
+                    "target": {
+                        "type": "answer",
+                        "id": 222,
+                        "question": {"id": "", "title": "空ID问题"},  # empty qid
+                        "author": {"name": "作者Z"},
+                        "voteup_count": 100,
+                        "favorite_count": 10,
+                        "excerpt": "摘要",
+                        "created_time": 1708700000,
+                    },
+                },
+            ],
+            "paging": {"is_end": True, "next": ""},
+        }
+        items = collector._parse_recommend_or_follow(data)
+        # Empty qid → invalid URL → item must be skipped
+        assert items == []
+
     def test_follow_uses_paging_next(self):
         """Follow should use paging.next URL for subsequent pages."""
         collector = ZhihuCliCollector({

@@ -80,10 +80,12 @@ class ApplePodcastCollector(BaseCollector):
         # Get duration if available
         duration = entry.get("itunes_duration", "")
 
-        # Parse enclosure file size (bytes)
+        # Parse enclosure audio URL and file size (bytes)
+        audio_url = ""
         file_size_bytes = 0
         enclosures = entry.get("enclosures", [])
         if enclosures:
+            audio_url = enclosures[0].get("href", "")
             try:
                 file_size_bytes = int(enclosures[0].get("length", 0))
             except (ValueError, TypeError, IndexError):
@@ -102,6 +104,7 @@ class ApplePodcastCollector(BaseCollector):
             extra={
                 "podcast": podcast_title,
                 "duration": duration,
+                "audio_url": audio_url,
                 "file_size_bytes": file_size_bytes,
             },
         )

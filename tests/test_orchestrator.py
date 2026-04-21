@@ -241,3 +241,170 @@ class TestLookbackHoursOverride:
 
         for name, src_cfg in config["sources"].items():
             assert src_cfg["lookback_hours"] == originals[name]
+
+
+class TestIgnoreSeenFlag:
+    """Verify --ignore-seen bypasses state DB dedup during collect."""
+
+    @pytest.mark.asyncio
+    async def test_ignore_seen_keeps_all_items(self):
+        """run_collect(ignore_seen=True) should not call filter_unseen()."""
+        from unittest.mock import AsyncMock, patch, MagicMock
+
+        from orchestrator import load_config, run_collect
+        from schema import ContentItem, CollectorResult
+
+        config = load_config()
+        config["enrichment"] = {"enabled": False}
+
+        fake_item = ContentItem(
+            source="test_source",
+            source_type="api",
+            title="Seen Item Should Still Be Kept",
+            url="https://example.com/test-ignore-seen",
+            content="Test content",
+            published_at="2026-03-01T00:00:00Z",
+            score=100,
+        )
+
+        mock_conn = MagicMock()
+
+        with patch("orchestrator.get_connection", return_value=mock_conn), \
+             patch("orchestrator.import_collectors"), \
+             patch("orchestrator._check_credentials"), \
+             patch("collectors.base.CollectorRegistry.create_all") as mock_create, \
+             patch("orchestrator.filter_unseen") as mock_filter_unseen:
+
+            mock_collector = MagicMock()
+            mock_collector.source_name = "test_source"
+            mock_collector.run = AsyncMock(return_value=CollectorResult(
+                source="test_source", success=True,
+                items=[fake_item], total_fetched=1,
+            ))
+            mock_create.return_value = [mock_collector]
+
+            results = await run_collect(
+                config,
+                "2026-03-01-test-ignore-seen",
+                ignore_seen=True,
+            )
+
+            mock_filter_unseen.assert_not_called()
+            assert len(results) == 1
+            assert results[0].items == [fake_item]
+
+
+class TestNoEnrichFlag:
+    """Verify --no-enrich disables enrichment."""
+
+    @pytest.mark.asyncio
+    async def test_no_enrich_flag_disables_enrichment(self):
+        """run_collect() with _no_enrich=True should skip enrichment."""
+        from unittest.mock import AsyncMock, patch, MagicMock
+
+        from orchestrator import load_config, run_collect
+        from collectors.base import CollectorRegistry
+        from schema import ContentItem, CollectorResult
+
+        config = load_config()
+        config["enrichment"] = {"enabled": True}
+        config["_no_enrich"] = True
+
+        fake_item = ContentItem(
+            source="test_source",
+            source_type="api",
+            title="Test Article",
+            url="https://example.com/test-no-enrich",
+            content="Test content",
+            published_at="2026-03-01T00:00:00Z",
+            score=100,
+        )
+
+        mock_conn = MagicMock()
+
+        with patch("orchestrator.get_connection", return_value=mock_conn), \
+             patch("orchestrator.filter_unseen", return_value=[fake_item]), \
+             patch("orchestrator.import_collectors"), \
+             patch("orchestrator._check_credentials"), \
+             patch("collectors.base.CollectorRegistry.create_all") as mock_create:
+
+            mock_collector = MagicMock()
+            mock_collector.source_name = "test_source"
+            mock_collector.run = AsyncMock(return_value=CollectorResult(
+                source="test_source", success=True,
+                items=[fake_item], total_fetched=1,
+            ))
+            mock_create.return_value = [mock_collector]
+
+            # Patch the enricher import path so we can verify it's NOT called
+            with patch("collectors.enricher.ContentEnricher") as mock_enricher_cls:
+                results = await run_collect(config, "2026-03-01-test-noenrich", source_filter=None)
+                # ContentEnricher should NOT be instantiated when _no_enrich is set
+                mock_enricher_cls.assert_not_called()
+
+            assert len(results) == 1
+
+
+class TestEnrichOnlyMode:
+    """Verify --enrich-only loads data and runs enrichment."""
+
+    @pytest.mark.asyncio
+    async def test_enrich_only_saves_enriched_json(self):
+        from unittest.mock import patch, MagicMock
+
+        from orchestrator import load_config, run_enrich_only, DATA_DIR
+        from schema import ContentItem
+
+        config = load_config()
+        config["enrichment"] = {"enabled": True, "timeout_seconds": 30}
+        target_date = "2026-03-01-test-enrich"
+
+        # Create test collected JSON
+        fake_items = [
+            ContentItem(
+                source="anthropic",
+                source_type="http_scrape",
+                title="Test Article",
+                url="https://anthropic.com/test",
+                content="Short content",
+                published_at="2026-03-01T00:00:00Z",
+                score=10,
+            ),
+            ContentItem(
+                source="cn_tech_blog",  # Should be filtered out
+                source_type="rss",
+                title="CN Article",
+                url="https://cn.example.com/test",
+                content="Chinese content",
+                published_at="2026-03-01T00:00:00Z",
+                score=5,
+            ),
+        ]
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        intermediate_path = DATA_DIR / f"collected-{target_date}-0700.json"
+        intermediate_path.write_text(
+            json.dumps([i.model_dump(mode="json") for i in fake_items], ensure_ascii=False)
+        )
+
+        try:
+            mock_enricher = MagicMock()
+            mock_enricher.process_batch.return_value = ([fake_items[0]], [])
+
+            with patch("collectors.enricher.ContentEnricher", return_value=mock_enricher), \
+                 patch("collectors.enricher.EnrichmentConfig") as mock_cfg_cls:
+                mock_cfg_cls.from_config.return_value = MagicMock()
+                await run_enrich_only(config, target_date)
+
+            # Verify only anthropic item was passed (cn_tech_blog filtered)
+            call_args = mock_enricher.process_batch.call_args[0][0]
+            sources = [i.source for i in call_args]
+            assert "anthropic" in sources
+            assert "cn_tech_blog" not in sources
+
+            # Verify enriched JSON was saved
+            enriched_files = list(DATA_DIR.glob(f"enriched-{target_date}*.json"))
+            assert len(enriched_files) >= 1
+        finally:
+            intermediate_path.unlink(missing_ok=True)
+            for f in DATA_DIR.glob(f"enriched-{target_date}*.json"):
+                f.unlink(missing_ok=True)

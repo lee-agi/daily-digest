@@ -2,7 +2,7 @@
 
 每日多源信息聚合系统，自动从 19 个平台采集内容，去重过滤后通过 any2summary 深度增强高质量条目，生成 LLM 摘要报告。
 
-**当前版本**: v0.17.0 | **活跃源**: 16/19 | **典型产出**: ~360 items/run
+**当前版本**: v0.18.1 | **活跃源**: 16/19 | **典型产出**: ~360 items/run
 
 ## Quick Start
 
@@ -20,11 +20,12 @@ cp .env.example .env
 docker-compose -f docker/docker-compose.yml up -d
 
 # 4. 运行
-python orchestrator.py --full --dry-run  # 完整流程（不推送）
+python orchestrator.py --full --dry-run --no-enrich  # 完整流程（不推送，不 enrich）
 python orchestrator.py --full --dry-run --lookback-hours 48  # 自定义回溯窗口
 python orchestrator.py --collect-only     # 仅采集
 python orchestrator.py --collect-only --source huggingface  # 单源测试
 python orchestrator.py --collect-only --inject-url "https://example.com"  # 注入 URL
+python orchestrator.py --enrich-only      # 独立运行 enrichment（基于最新 collected JSON）
 ```
 
 ## Data Sources
@@ -53,11 +54,15 @@ python orchestrator.py --collect-only --inject-url "https://example.com"  # 注�
 
 ## Content Enrichment
 
-v0.14.0 新增内容增强功能，在采集完成后自动对高质量条目调用 [any2summary](~/Documents/Code/any2summary) 获取全文/转录：
+内容增强功能，对高质量条目调用 [any2summary](~/Documents/Code/any2summary) 获取全文/转录。v0.18.1 起 enrichment 独立于主 pipeline 运行：
 
-- **文章** (Anthropic/OpenAI/量子位等): 内容 <5k 字符的全部自动获取全文
-- **YouTube**: 按互动率 (likes+comments)/views 排序，top-N 获取字幕+摘要
-- **播客**: ≤30min 自动转录，>30min 输出 manual suggestion
+- **主 pipeline** (`--full`): 默认传 `--no-enrich`，快速完成采集+摘要+推送
+- **Enrichment** (`--enrich-only`): 独立执行，仅处理英文 Articles / YouTube / Podcast，输出 `enriched-{date}.json`
+
+支持的内容类型：
+- **文章** (Anthropic/OpenAI/Google Blog): 内容 <5k 字符自动获取全文 (timeout: 30s)
+- **YouTube**: 按互动率排序 top-N，字幕+摘要 (timeout: 600s)
+- **播客**: 优先使用 `audio_url` 直传音频，≤30min 自动转录 (timeout: 180s)
 - **手动 URL**: `data/pending_urls.yaml` 或 `--inject-url` 注入
 
 ```bash
@@ -114,17 +119,22 @@ All thresholds in `config.yaml` are per-source configurable:
 
 ## Scheduling
 
-### macOS launchd (data collection at 06:30)
+### macOS launchd
+- `com.openclaw.digest-collect`: **06:30** collect-only
+- `com.openclaw.digest-summarize`: **07:00** summarize + push
+
 ```bash
 cp launchd/com.openclaw.digest-collect.plist ~/Library/LaunchAgents/
+cp launchd/com.openclaw.digest-summarize.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.openclaw.digest-collect.plist
+launchctl load ~/Library/LaunchAgents/com.openclaw.digest-summarize.plist
 launchctl list | grep digest  # 验证
 ```
 
-Wrapper scripts (`scripts/run-collect.sh`, `scripts/run-summarize.sh`) handle environment variable loading for launchd.
-
-### OpenClaw cron (LLM summary at 07:00)
-Configured via `~/.openclaw/cron/jobs.json`.
+Wrapper script (`scripts/run.sh`) handles environment variable loading.
+- collect: `scripts/run.sh --collect-only`
+- summarize/push: `scripts/run.sh --summarize-and-push`
+- full/manual: `scripts/run.sh` (default `--full --no-enrich`)
 
 ## Known Issues
 - **Reddit**: OAuth app registration blocked by Responsible Builder Policy; using public API (13 items/run)

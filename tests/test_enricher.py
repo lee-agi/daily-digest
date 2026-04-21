@@ -220,7 +220,7 @@ class TestCallAny2Summary:
         mock_result.returncode = 0
         mock_result.stdout = "not json at all"
         with patch("subprocess.run", return_value=mock_result):
-            result = enricher.call_any2summary("https://example.com")
+            result = enricher.call_any2summary("hhttps://example.com/ttps://example.com")
         assert result is None
 
 
@@ -378,7 +378,7 @@ class TestProcessBatch:
 
         call_count = 0
 
-        def fake_enrich(item: ContentItem) -> bool:
+        def fake_enrich(item: ContentItem, timeout=None) -> bool:
             nonlocal call_count
             call_count += 1
             return False  # Always fail
@@ -409,7 +409,7 @@ class TestProcessBatch:
         results = [False, False, True, False, False, False, False]
         call_idx = 0
 
-        def fake_enrich(item: ContentItem) -> bool:
+        def fake_enrich(item: ContentItem, timeout=None) -> bool:
             nonlocal call_idx
             idx = call_idx
             call_idx += 1
@@ -428,7 +428,7 @@ class TestEnrichmentConfigFromConfig:
     def test_defaults(self):
         cfg = EnrichmentConfig.from_config({"enabled": True})
         assert cfg.enabled is True
-        assert cfg.timeout_seconds == 180
+        assert cfg.timeout_seconds == 300
         assert cfg.youtube_top_n == 5
 
     def test_custom_values(self):
@@ -443,3 +443,149 @@ class TestEnrichmentConfigFromConfig:
         assert cfg.timeout_seconds == 60
         assert cfg.youtube_top_n == 10
         assert cfg.article_top_n == 20
+
+    def test_article_timeout_default_30s(self):
+        cfg = EnrichmentConfig.from_config({"enabled": True})
+        assert cfg.article_timeout == 30
+
+    def test_youtube_timeout_default_600s(self):
+        cfg = EnrichmentConfig.from_config({"enabled": True})
+        assert cfg.youtube_timeout == 600
+
+    def test_podcast_timeout_default_180s(self):
+        cfg = EnrichmentConfig.from_config({"enabled": True})
+        assert cfg.podcast_timeout == 180
+
+    def test_custom_per_type_timeouts(self):
+        cfg = EnrichmentConfig.from_config({
+            "enabled": True,
+            "sources": {
+                "articles": {"timeout": 15},
+                "youtube": {"timeout": 300},
+                "apple_podcast": {"timeout": 90},
+            },
+        })
+        assert cfg.article_timeout == 15
+        assert cfg.youtube_timeout == 300
+        assert cfg.podcast_timeout == 90
+
+
+# ---------- call_any2summary with custom timeout ----------
+
+class TestCallAny2SummaryTimeout:
+    def test_uses_custom_timeout(self, enricher: ContentEnricher):
+        """Custom timeout is passed to subprocess.run."""
+        payload = {"summary": "Hello world summary " * 10, "total_words": 50}
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps(payload)
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            enricher.call_any2summary("https://example.com/article", timeout=42)
+
+        _, kwargs = mock_run.call_args
+        assert kwargs["timeout"] == 42
+
+    def test_falls_back_to_config_timeout(self, enricher: ContentEnricher):
+        """When timeout=None, uses config.timeout_seconds."""
+        payload = {"summary": "Hello world summary " * 10, "total_words": 50}
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps(payload)
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            enricher.call_any2summary("https://example.com/article")
+
+        _, kwargs = mock_run.call_args
+        assert kwargs["timeout"] == enricher.config.timeout_seconds
+
+
+# ---------- podcast audio_url preference ----------
+
+class TestPodcastAudioUrl:
+    def test_podcast_uses_audio_url(self, enricher: ContentEnricher):
+        """Podcast items should use extra.audio_url for enrichment."""
+        item = _make_item(
+            source="apple_podcast",
+            tags=["podcast"],
+            url="https://podcasts.apple.com/episode/123",
+            extra={"audio_url": "https://cdn.example.com/audio.mp3"},
+        )
+        mock_data = {
+            "summary": "This is a rich summary of the podcast " * 5,
+            "total_words": 500,
+        }
+        with patch.object(enricher, "call_any2summary", return_value=mock_data) as mock_call:
+            result = enricher.enrich_item(item)
+
+        assert result is True
+        # Should have been called with the audio_url, not the webpage URL
+        mock_call.assert_called_once_with(
+            "https://cdn.example.com/audio.mp3", timeout=None,
+        )
+
+    def test_podcast_falls_back_to_url(self, enricher: ContentEnricher):
+        """When no audio_url, fallback to item.url."""
+        item = _make_item(
+            source="xiaoyuzhou",
+            tags=["podcast"],
+            url="https://www.xiaoyuzhoufm.com/episode/123",
+            extra={},
+        )
+        mock_data = {
+            "summary": "This is a rich summary of the podcast " * 5,
+            "total_words": 500,
+        }
+        with patch.object(enricher, "call_any2summary", return_value=mock_data) as mock_call:
+            enricher.enrich_item(item)
+
+        mock_call.assert_called_once_with(
+            "https://www.xiaoyuzhoufm.com/episode/123", timeout=None,
+        )
+
+    def test_non_podcast_ignores_audio_url(self, enricher: ContentEnricher):
+        """Non-podcast items should use item.url even if audio_url exists in extra."""
+        item = _make_item(
+            source="anthropic",
+            source_type=SourceType.HTTP_SCRAPE,
+            url="https://anthropic.com/blog/article",
+            extra={"audio_url": "https://cdn.example.com/should-not-use.mp3"},
+        )
+        mock_data = {
+            "summary": "This is a rich summary of the article " * 5,
+            "total_words": 500,
+        }
+        with patch.object(enricher, "call_any2summary", return_value=mock_data) as mock_call:
+            enricher.enrich_item(item)
+
+        mock_call.assert_called_once_with(
+            "https://anthropic.com/blog/article", timeout=None,
+        )
+
+
+# ---------- article sources exclude CN ----------
+
+class TestArticleSourcesExcludeCN:
+    def test_cn_tech_blog_excluded(self, enricher: ContentEnricher):
+        items = [
+            _make_item(source="cn_tech_blog", source_type=SourceType.RSS, content="x" * 100),
+        ]
+        selected = enricher.select_article_items(items)
+        assert len(selected) == 0
+
+    def test_baoyu_blog_excluded(self, enricher: ContentEnricher):
+        items = [
+            _make_item(source="baoyu_blog", source_type=SourceType.RSS, content="x" * 100),
+        ]
+        selected = enricher.select_article_items(items)
+        assert len(selected) == 0
+
+    def test_english_sources_included(self, enricher: ContentEnricher):
+        items = [
+            _make_item(source="anthropic", source_type=SourceType.HTTP_SCRAPE, content="x" * 100),
+            _make_item(source="openai", source_type=SourceType.RSS, content="y" * 100),
+            _make_item(source="google_blog", source_type=SourceType.RSS, content="z" * 100),
+            _make_item(source="manual_urls", source_type=SourceType.HTTP_SCRAPE, content="w" * 100),
+        ]
+        selected = enricher.select_article_items(items)
+        assert len(selected) == 4
