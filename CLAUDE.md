@@ -191,8 +191,8 @@ Multi-source daily digest pipeline that collects content from 19 platforms, dedu
 3. The collector auto-registers via `__init_subclass__` — no other changes needed
 
 ### Triggering
-- **launchd collect** (06:30 CST): `scripts/run.sh --collect-only`
-- **launchd summarize** (07:00 CST): `scripts/run.sh --summarize-and-push`
+- **launchd full** (07:00 CST): `scripts/run.sh`（默认 `--full --no-enrich`）
+- 旧的两阶段 launchd（06:30 collect / 07:00 summarize）已废弃，保留 CLI 仅供手动调试
 - Unified wrapper script handles env var loading (.env + ~/.secrets + ~/.bashrc Azure vars)
 - Usage: `scripts/run.sh [--collect-only | --summarize-and-push | --full] [extra args...]` (default: `--full --no-enrich`)
 - **Enrichment 单独执行**: `python orchestrator.py --enrich-only` (加载最新 collected JSON，仅 enrich 英文 Articles/YouTube/Podcast)

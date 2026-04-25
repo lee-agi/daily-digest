@@ -1,0 +1,131 @@
+{
+  "schema_version": 2,
+  "month": "2026-03",
+  "total_items": 2409,
+  "selected_items": 180,
+  "cluster_count": 12,
+  "batch_count": 3,
+  "top_keywords": [
+    "Qwen",
+    "ICLR",
+    "Qwen 3.5",
+    "Oral",
+    "ChatGPT",
+    "Claude Code",
+    "Claude",
+    "LLM",
+    "Intelligence",
+    "Gemini",
+    "LLMs",
+    "Transformers"
+  ],
+  "focus_themes": [
+    "ChatGPT",
+    "Python",
+    "Learning",
+    "Claude",
+    "OpenClaw"
+  ],
+  "conclusion_bullets": [
+    "ChatGPT 生态继续扩张，从高星提示库到 Langflow/LangChain 等代理工作流平台，社区工具化趋势明显。",
+    "OpenAI 强化产品体验与企业能力，GPT-5.3 减少过度谨慎回复，ChatGPT Skills 进入企业/商业版内测。",
+    "Python 仍是核心工程语言，资源合集与算法仓库持续走热，并出现超高速解释器 Monty 的新探索。",
+    "开放学习与教育内容活跃，TensorFlow 作为基础框架持续被关注，MIT 开放教育话题延续。",
+    "Claude 侧重交互能力与代理架构，新增图表生成并讨论“模型+运行时+Harness”的开放式代理设计。"
+  ],
+  "watch_bullets": [
+    "关注 ChatGPT Skills 的企业落地场景与与 LangChain/Langflow 的集成生态。",
+    "观察 Claude 的交互式图表功能是否带来数据分析工作流的新模式。",
+    "跟进 Monty 解释器的性能进展及对 Python 工程实践的潜在影响。",
+    "关注 OpenClaw 与相关工具链的版本更新及 Agent 架构实践案例。"
+  ],
+  "top_cases": [
+    {
+      "theme": "ChatGPT",
+      "count": 8,
+      "source_variety": 2,
+      "title": "f/prompts.chat: f.k.a. Awesome ChatGPT Prompts. Share, discover, and collect prompts from the community. Free and open source — self-host for your organization with complete privacy.",
+      "source": "github",
+      "url": "https://github.com/f/prompts.chat",
+      "content": "f.k.a. Awesome ChatGPT Prompts. Share, discover, and collect prompts from the community. Free and open source — self-host for your organization with complete pr",
+      "score": 152217.0
+    },
+    {
+      "theme": "ChatGPT",
+      "count": 8,
+      "source_variety": 2,
+      "title": "langflow-ai/langflow: Langflow is a powerful tool for building and deploying AI-powered agents and workflows.",
+      "source": "github",
+      "url": "https://github.com/langflow-ai/langflow",
+      "content": "Langflow is a powerful tool for building and deploying AI-powered agents and workflows.",
+      "score": 145626.0
+    },
+    {
+      "theme": "Python",
+      "count": 4,
+      "source_variety": 2,
+      "title": "vinta/awesome-python: An opinionated list of awesome Python frameworks, libraries, software and resources.",
+      "source": "github",
+      "url": "https://github.com/vinta/awesome-python",
+      "content": "An opinionated list of awesome Python frameworks, libraries, software and resources.",
+      "score": 287785.0
+    },
+    {
+      "theme": "Python",
+      "count": 4,
+      "source_variety": 2,
+      "title": "TheAlgorithms/Python: All Algorithms implemented in Python",
+      "source": "github",
+      "url": "https://github.com/TheAlgorithms/Python",
+      "content": "All Algorithms implemented in Python",
+      "score": 218601.0
+    },
+    {
+      "theme": "Learning",
+      "count": 3,
+      "source_variety": 2,
+      "title": "tensorflow/tensorflow: An Open Source Machine Learning Framework for Everyone",
+      "source": "github",
+      "url": "https://github.com/tensorflow/tensorflow",
+      "content": "An Open Source Machine Learning Framework for Everyone",
+      "score": 194125.0
+    },
+    {
+      "theme": "Learning",
+      "count": 3,
+      "source_variety": 2,
+      "title": "The Power of Free Knowledge",
+      "source": "youtube",
+      "url": "https://www.youtube.com/watch?v=CoZA-JF8fkA",
+      "content": "How MIT Open Learning is Shaping Tomorrow’s Open Education Landscape with Dana Doyle and Curt Newton Please join us for a lively and inspiring conversation with",
+      "score": 40142.517814726845
+    },
+    {
+      "theme": "Claude",
+      "count": 3,
+      "source_variety": 2,
+      "title": "Open Models, Open Runtime, Open Harness - Building your own AI agent with LangChain and Nvidia",
+      "source": "youtube",
+      "url": "https://www.youtube.com/watch?v=BEYEWw1Mkmw",
+      "content": "Claude Code, OpenClaw, Manus and other agents all use the same architecture under the hood. They consist of a model, a runtime (environment), and a harness. In ",
+      "score": 115732.36889692585
+    },
+    {
+      "theme": "Claude",
+      "count": 3,
+      "source_variety": 2,
+      "title": "Claude can now build interactive charts and diagrams, directly in the chat. Available today in beta on all plans, including free. Try it out: https://t.co/tHPAZRgQkn https://t.co/WXRrD4VkAt",
+      "source": "x_twitter",
+      "url": "https://x.com/claudeai/status/2032124273587077133",
+      "content": "Claude can now build interactive charts and diagrams, directly in the chat. Available today in beta on all plans, including free. Try it out: https://t.co/tHPAZ",
+      "score": 32082.0
+    }
+  ],
+  "max_items": 180,
+  "max_clusters": 12,
+  "batch_size": 4,
+  "batch_timeout": 180,
+  "final_timeout": 240,
+  "use_cache": true,
+  "elapsed_seconds": 0.73
+}

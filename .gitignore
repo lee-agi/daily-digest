@@ -1,5 +1,6 @@
 .env
 state.db
+state.db.bak
 state.db-wal
 state.db-shm
 data/
@@ -36,3 +37,6 @@ Thumbs.db
 .idea/
 *.swp
 *~
+
+# Cache / build
+.cache/

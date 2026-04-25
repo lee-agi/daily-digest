@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>com.openclaw.digest-annual</string>
+<key>ProgramArguments</key><array><string>/bin/bash</string><string>/Users/lee/.openclaw/daily-digest/scripts/run_ai_periodic_report.sh</string><string>annual</string></array>
+<key>WorkingDirectory</key><string>/Users/lee/.openclaw/daily-digest</string>
+<key>StartCalendarInterval</key><dict><key>Month</key><integer>1</integer><key>Day</key><integer>4</integer><key>Hour</key><integer>10</integer><key>Minute</key><integer>45</integer></dict>
+<key>StandardOutPath</key><string>/Users/lee/.openclaw/daily-digest/logs/digest-annual.log</string>
+<key>StandardErrorPath</key><string>/Users/lee/.openclaw/daily-digest/logs/digest-annual-error.log</string>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string></dict>
+</dict></plist>

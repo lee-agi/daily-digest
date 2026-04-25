@@ -120,14 +120,13 @@ All thresholds in `config.yaml` are per-source configurable:
 ## Scheduling
 
 ### macOS launchd
-- `com.openclaw.digest-collect`: **06:30** collect-only
-- `com.openclaw.digest-summarize`: **07:00** summarize + push
+- `com.openclaw.digest-full`: **07:00** full pipeline (`--full --no-enrich` via `scripts/run.sh` default)
 
 ```bash
-cp launchd/com.openclaw.digest-collect.plist ~/Library/LaunchAgents/
-cp launchd/com.openclaw.digest-summarize.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.openclaw.digest-collect.plist
-launchctl load ~/Library/LaunchAgents/com.openclaw.digest-summarize.plist
+cp launchd/com.openclaw.digest-full.plist ~/Library/LaunchAgents/
+launchctl unload ~/Library/LaunchAgents/com.openclaw.digest-collect.plist 2>/dev/null || true
+launchctl unload ~/Library/LaunchAgents/com.openclaw.digest-summarize.plist 2>/dev/null || true
+launchctl load ~/Library/LaunchAgents/com.openclaw.digest-full.plist
 launchctl list | grep digest  # 验证
 ```
 

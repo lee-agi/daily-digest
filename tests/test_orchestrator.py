@@ -132,7 +132,7 @@ class TestMarkSeenTiming:
             published_at="2026-02-28T00:00:00Z",
             score=100,
         )
-        intermediate_path = DATA_DIR / f"collected-{target_date}.json"
+        intermediate_path = DATA_DIR / f"collected-{target_date}-0700.json"
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         intermediate_path.write_text(
             json.dumps([fake_item.model_dump(mode="json")], ensure_ascii=False)
@@ -142,15 +142,14 @@ class TestMarkSeenTiming:
             with patch("report.generator.generate_digest_report") as mock_gen, \
                  patch("report.push.push_report", new_callable=AsyncMock) as mock_push, \
                  patch("orchestrator.mark_seen") as mock_mark_seen, \
-                 patch("orchestrator.get_connection"):
+                 patch("orchestrator.get_connection"), \
+                 patch("orchestrator.has_successful_run", return_value=False):
 
                 # Mock report generation
                 from schema import DigestReport
                 mock_report = DigestReport(
                     date=target_date,
-                    total_items=1,
-                    sources_summary={},
-                    full_markdown="# Test Report",
+                    full_markdown="# Test Report\n\n## Platform Statistics\n| Platform | Items |\n|----------|-------|\n| **Total** | **1** |\n",
                 )
                 mock_gen.return_value = mock_report
 
@@ -181,7 +180,7 @@ class TestMarkSeenTiming:
             published_at="2026-02-28T00:00:00Z",
             score=100,
         )
-        intermediate_path = DATA_DIR / f"collected-{target_date}.json"
+        intermediate_path = DATA_DIR / f"collected-{target_date}-0700.json"
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         intermediate_path.write_text(
             json.dumps([fake_item.model_dump(mode="json")], ensure_ascii=False)
@@ -195,9 +194,7 @@ class TestMarkSeenTiming:
                 from schema import DigestReport
                 mock_report = DigestReport(
                     date=target_date,
-                    total_items=1,
-                    sources_summary={},
-                    full_markdown="# Test DryRun Report",
+                    full_markdown="# Test DryRun Report\n\n## Platform Statistics\n| Platform | Items |\n|----------|-------|\n| **Total** | **1** |\n",
                 )
                 mock_gen.return_value = mock_report
 
@@ -343,6 +340,75 @@ class TestNoEnrichFlag:
                 mock_enricher_cls.assert_not_called()
 
             assert len(results) == 1
+
+
+class TestDuplicatePushGuard:
+    """Prevent duplicate summarize/push for the same date once already successful."""
+
+    @pytest.mark.asyncio
+    async def test_skip_duplicate_push_after_successful_run(self):
+        from unittest.mock import AsyncMock, patch, MagicMock
+
+        from orchestrator import load_config, run_summarize_and_push
+
+        config = load_config()
+        target_date = "2026-04-22-test-dup-guard"
+        mock_conn = MagicMock()
+
+        with patch("orchestrator.get_connection", return_value=mock_conn), \
+             patch("orchestrator.has_successful_run", return_value=True), \
+             patch("report.generator.generate_digest_report", new_callable=AsyncMock) as mock_gen, \
+             patch("report.push.push_report", new_callable=AsyncMock) as mock_push:
+
+            await run_summarize_and_push(config, target_date, dry_run=False)
+
+            mock_gen.assert_not_called()
+            mock_push.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_force_allows_rerun_after_successful_run(self):
+        import json
+        from unittest.mock import AsyncMock, patch, MagicMock
+
+        from orchestrator import load_config, run_summarize_and_push, DATA_DIR
+        from schema import ContentItem, DigestReport
+
+        config = load_config()
+        target_date = "2026-04-22-test-force-rerun"
+        fake_item = ContentItem(
+            source="test_source",
+            source_type="api",
+            title="Force Re-run",
+            url="https://example.com/test-force-rerun",
+            content="Test content",
+            published_at="2026-04-22T00:00:00Z",
+            score=100,
+        )
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        intermediate_path = DATA_DIR / f"collected-{target_date}-0700.json"
+        intermediate_path.write_text(
+            json.dumps([fake_item.model_dump(mode="json")], ensure_ascii=False)
+        )
+
+        try:
+            mock_conn = MagicMock()
+            with patch("orchestrator.get_connection", return_value=mock_conn), \
+                 patch("orchestrator.has_successful_run", return_value=True), \
+                 patch("report.generator.generate_digest_report", new_callable=AsyncMock) as mock_gen, \
+                 patch("report.push.push_report", new_callable=AsyncMock) as mock_push, \
+                 patch("orchestrator.mark_seen"):
+
+                mock_gen.return_value = DigestReport(
+                    date=target_date,
+                    full_markdown="# Test Force Report\n\n## Platform Statistics\n| Platform | Items |\n|----------|-------|\n| **Total** | **1** |\n",
+                )
+
+                await run_summarize_and_push(config, target_date, dry_run=False, force=True)
+
+                mock_gen.assert_called_once()
+                mock_push.assert_called_once()
+        finally:
+            intermediate_path.unlink(missing_ok=True)
 
 
 class TestEnrichOnlyMode:

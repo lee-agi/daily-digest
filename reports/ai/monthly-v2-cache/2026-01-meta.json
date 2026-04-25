@@ -1,0 +1,26 @@
+{
+  "schema_version": 2,
+  "month": "2026-01",
+  "total_items": 0,
+  "selected_items": 0,
+  "cluster_count": 0,
+  "batch_count": 0,
+  "top_keywords": [],
+  "focus_themes": [],
+  "conclusion_bullets": [
+    "本月暂无足够数据。"
+  ],
+  "watch_bullets": [
+    "继续观察跨来源反复出现的主题。",
+    "优先补读高分代表条目的一手资料。",
+    "对噪音高、重复低的主题降权处理。"
+  ],
+  "top_cases": [],
+  "max_items": 160,
+  "max_clusters": 10,
+  "batch_size": 4,
+  "batch_timeout": 150,
+  "final_timeout": 210,
+  "use_cache": true,
+  "elapsed_seconds": 0.0
+}

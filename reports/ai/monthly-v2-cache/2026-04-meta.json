@@ -1,0 +1,28 @@
+{
+  "month": "2026-04",
+  "total_items": 4168,
+  "selected_items": 180,
+  "cluster_count": 12,
+  "batch_count": 3,
+  "top_keywords": [
+    "Qwen",
+    "Claude Code",
+    "Claude",
+    "ChatGPT",
+    "Gemma",
+    "Gemma 4",
+    "Codex",
+    "Gemini",
+    "Opus",
+    "GPT-5.5",
+    "Qwen 3.5",
+    "Microsoft"
+  ],
+  "max_items": 180,
+  "max_clusters": 12,
+  "batch_size": 4,
+  "batch_timeout": 180,
+  "final_timeout": 240,
+  "use_cache": true,
+  "elapsed_seconds": 1.13
+}

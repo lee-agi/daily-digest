@@ -131,3 +131,23 @@ def get_latest_run(conn: sqlite3.Connection, date: str, phase: str) -> dict | No
         return None
     cols = ["run_id", "date", "phase", "started_at", "finished_at", "status", "result_json", "error"]
     return dict(zip(cols, row))
+
+
+def has_successful_run(conn: sqlite3.Connection, date: str, phases: list[str]) -> bool:
+    """Return True if any of the given phases already succeeded for the date."""
+    if not phases:
+        return False
+    placeholders = ",".join("?" for _ in phases)
+    row = conn.execute(
+        f"""
+        SELECT 1
+        FROM run_history
+        WHERE date = ?
+          AND phase IN ({placeholders})
+          AND status = 'success'
+        ORDER BY started_at DESC
+        LIMIT 1
+        """,
+        [date, *phases],
+    ).fetchone()
+    return row is not None

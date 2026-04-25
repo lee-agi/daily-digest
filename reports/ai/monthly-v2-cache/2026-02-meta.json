@@ -1,0 +1,131 @@
+{
+  "schema_version": 2,
+  "month": "2026-02",
+  "total_items": 40,
+  "selected_items": 40,
+  "cluster_count": 10,
+  "batch_count": 3,
+  "top_keywords": [
+    "pull",
+    "gradio",
+    "google-gemini",
+    "gemini-cli",
+    "gradio-app",
+    "fix",
+    "feat",
+    "Add",
+    "cloudwego",
+    "eino",
+    "onyx-dot-app",
+    "Changed"
+  ],
+  "focus_themes": [
+    "fix",
+    "pull",
+    "zhihu",
+    "reddit",
+    "blog"
+  ],
+  "conclusion_bullets": [
+    "llama.cpp 发布更新，支持 Hugging Face 模型元数据加载与增量下载缓存修复。",
+    "视觉前端修复工具 theORQL 推出，强调“截图→代码→浏览器验证→可审 diff”的闭环。",
+    "Google gemini-cli 多版本迭代，涉及 plan 模式测试、认证握手与编辑体验改进。",
+    "Gradio 组件持续更新，新增 HTML 上传与 Gallery 样式修复。",
+    "社区讨论聚焦本地模型实践与对 OpenAI 的情绪波动，同时有轻量化扩散模型教学项目。"
+  ],
+  "watch_bullets": [
+    "llama.cpp 与 gemini-cli 的后续版本是否带来更稳定的本地/CLI 生产力提升。",
+    "视觉驱动的 UI 自动修复工具在真实工程落地效果与安全性。",
+    "轻量扩散模型与本地模型在开发者圈的实际采用和生态扩展情况。",
+    "关注 MoE 专家分化与世界模型在实际任务中的落地效果与评测标准。"
+  ],
+  "top_cases": [
+    {
+      "theme": "fix",
+      "count": 2,
+      "source_variety": 2,
+      "title": "[Release] ggml-org/llama.cpp b8180",
+      "source": "github",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/tag/b8180",
+      "content": "<details open> tests : model metadata loading from huggingface (#19796) * Add model metadata loading from huggingface for use with other tests * Add incremental",
+      "score": 96142.0
+    },
+    {
+      "theme": "fix",
+      "count": 2,
+      "source_variety": 2,
+      "title": "theORQL",
+      "source": "producthunt",
+      "url": "https://www.producthunt.com/products/stop-coding-blind-ai-that-sees-the-ui?utm_campaign=producthunt-api&utm_medium=api-v2&utm_source=Application%3A+Lee+%28ID%3A+276949%29",
+      "content": "theORQL is vision-enabled frontend AI. It takes UI screenshots, maps UI → code, triggers real browser interactions, and visually verifies the fix in Chrome befo",
+      "score": 84.0
+    },
+    {
+      "theme": "pull",
+      "count": 10,
+      "source_variety": 1,
+      "title": "[Release] google-gemini/gemini-cli v0.31.0",
+      "source": "github",
+      "url": "https://github.com/google-gemini/gemini-cli/releases/tag/v0.31.0",
+      "content": "## What's Changed * Use ranged reads and limited searches and fuzzy editing improvements by @gundermanc in https://github.com/google-gemini/gemini-cli/pull/1924",
+      "score": 95982.0
+    },
+    {
+      "theme": "pull",
+      "count": 10,
+      "source_variety": 1,
+      "title": "[Release] google-gemini/gemini-cli v0.32.0-preview.0",
+      "source": "github",
+      "url": "https://github.com/google-gemini/gemini-cli/releases/tag/v0.32.0-preview.0",
+      "content": "## What's Changed * feat(plan): add integration tests for plan mode by @Adib234 in https://github.com/google-gemini/gemini-cli/pull/20214 * fix(acp): update aut",
+      "score": 95982.0
+    },
+    {
+      "theme": "zhihu",
+      "count": 7,
+      "source_variety": 1,
+      "title": "为什么几个朋友自从被字节腾讯阿里裁员以后再也不说话了？",
+      "source": "zhihu",
+      "url": "https://www.zhihu.com/question/659273262/answer/1951329419084953387",
+      "content": "何止被裁员后不说话，若后续长期找不到工作，无法重回巅峰，渐渐都可能会从社交圈中消失。 不仅是裁员，脱发/皮肤病/意外残疾/脑梗/心梗/离婚/衰老/亲人生离死别，任何一场无声的「人生剥夺与失去」，都可能让一个曾在朋友圈中谈笑人生，激扬文字的人渐渐变得沉默。很多没体验过「失去」的人未曾意识到：一个人「能参与讨论」某类话题的",
+      "score": 19975.0
+    },
+    {
+      "theme": "zhihu",
+      "count": 7,
+      "source_variety": 1,
+      "title": "为什么要调查李铁?",
+      "source": "zhihu",
+      "url": "https://www.zhihu.com/question/568964835/answer/2006418377237869294",
+      "content": "李铁操作太骚了。 你妈给你200，让你去超市买酱油。你花20买一桶酱油，然后自己贪下来180。看你拿着20的酱油回家，你妈若有所思，但是没说你什么。 另一种情况，你妈给你200，让你买酱油，你说我腿脚不好，没有那个能力，买不了。你妈骂了你几句。找别人去了。 铁子是怎么操作的呢 你妈给你200让你去超市买酱油。 铁子自己",
+      "score": 12303.0
+    },
+    {
+      "theme": "reddit",
+      "count": 7,
+      "source_variety": 1,
+      "title": "Is Qwen3.5 a coding game changer for anyone else?",
+      "source": "reddit",
+      "url": "https://reddit.com/r/LocalLLaMA/comments/1rgtxry/is_qwen35_a_coding_game_changer_for_anyone_else/",
+      "content": "I've been playing with local LLMs for nearly 2 years on a rig with 3 older GPUs and 44 GB total VRAM, starting with Ollama, but recently using llama.cpp. I've u",
+      "score": 51.0
+    },
+    {
+      "theme": "reddit",
+      "count": 7,
+      "source_variety": 1,
+      "title": "Wow.",
+      "source": "reddit",
+      "url": "https://reddit.com/r/OpenAI/comments/1rgxpsd/wow/",
+      "content": "I hope everyone moves to Claude after this news. ✌️",
+      "score": 50.0
+    }
+  ],
+  "max_items": 160,
+  "max_clusters": 10,
+  "batch_size": 4,
+  "batch_timeout": 150,
+  "final_timeout": 210,
+  "use_cache": true,
+  "elapsed_seconds": 0.02
+}

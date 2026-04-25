@@ -36,6 +36,7 @@ from state import (
     filter_unseen,
     get_connection,
     get_latest_run,
+    has_successful_run,
     mark_seen,
     save_run,
 )
@@ -244,8 +245,21 @@ async def run_summarize_and_push(
     config: dict,
     target_date: str,
     dry_run: bool = False,
+    force: bool = False,
 ) -> None:
     """Phase 2: Load intermediate JSON, generate LLM summary, distribute."""
+    if not dry_run and not force:
+        conn = get_connection()
+        try:
+            if has_successful_run(conn, target_date, ["summarize", "full"]):
+                logger.warning(
+                    "Digest for %s already pushed successfully; skipping duplicate summarize/push",
+                    target_date,
+                )
+                return
+        finally:
+            conn.close()
+
     candidates = sorted(
         [p for p in DATA_DIR.glob(f"collected-{target_date}*.json") if p.name.startswith(f"collected-{target_date}-")],
         key=lambda p: p.stat().st_mtime,
@@ -384,6 +398,8 @@ async def main() -> None:
                         help="Skip seen-item filtering during collect (for historical backfills)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Don't push to RSS/Feishu")
+    parser.add_argument("--force", action="store_true",
+                        help="Force summarize/push even if this date already succeeded")
     parser.add_argument("--verbose", action="store_true",
                         help="Enable debug logging")
     args = parser.parse_args()
@@ -448,7 +464,12 @@ async def main() -> None:
                 record.collector_results = results
 
             if args.summarize_and_push or args.full:
-                await run_summarize_and_push(config, target_date, args.dry_run)
+                await run_summarize_and_push(
+                    config,
+                    target_date,
+                    args.dry_run,
+                    force=args.force,
+                )
 
         record.status = "success"
     except Exception as e:
