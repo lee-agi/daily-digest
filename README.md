@@ -16,7 +16,7 @@ uv pip install -r <(python -c "import tomllib; d=tomllib.load(open('pyproject.to
 cp .env.example .env
 # 编辑 .env 填入 API keys
 
-# 3. 启动 RSSHub (可选，即刻/小宇宙/宝玉博客需要)
+# 3. 启动 RSSHub (可选，即刻需要；宝玉博客有 fallback)
 docker-compose -f docker/docker-compose.yml up -d
 
 # 4. 运行
@@ -35,20 +35,21 @@ python orchestrator.py --enrich-only      # 独立运行 enrichment（基于最�
 | X/Twitter | TwitterAPI.io (+ twikit fallback) | TWITTER_API_IO_KEY (+ X_AUTH_TOKEN/X_CT0) |
 | GitHub | REST API | GITHUB_TOKEN (optional) |
 | Reddit | OAuth2/Public API | REDDIT_CLIENT_ID/SECRET (optional) |
-| YouTube | Data API v3 (playlistItems) | YOUTUBE_DATA_API_KEY (required) |
+| YouTube | Data API v3 (playlistItems + videos) | YOUTUBE_DATA_API_KEY（或兼容 YOUTUBE_API_KEY） |
 | 知乎 | Direct API (hot/recommend/follow) | zhihu-cli cookies |
 | 即刻 | RSSHub | JIKE_COOKIES → RSSHub |
 | 小宇宙 | RSSHub | None |
 | HuggingFace | HTTP API | None |
 | papers.cool | HTTP Scrape | None |
 | Apple Podcast | Native RSS | None |
-| WeRead | Browser Relay | WeChat login |
+| WeRead | RSS feeds（含微信读书热榜） | None |
+| Kindle 热门图书 | RSS feeds（Kindle/ebook榜单） | None |
 | Anthropic Blog | HTTP Scrape | None |
 | OpenAI Blog | Native RSS | None |
 | Google Blog | Native RSS | None |
 | CCF Best Paper | OpenReview API + YAML | None |
 | 机器之心/量子位/AI洞察日报 | RSS (GitHub/CloudFlare) | None |
-| 宝玉博客 | RSSHub /baoyu/blog | RSSHub |
+| 宝玉博客 | 直连 RSS + RSSHub fallback | None（可选 RSSHub） |
 | Product Hunt | GraphQL API (top 10/day) | PRODUCTHUNT_API_TOKEN |
 | Manual URLs | any2summary + Mac Reminders T5T | None |
 
@@ -140,4 +141,4 @@ Wrapper script (`scripts/run.sh`) handles environment variable loading.
 - **Reddit**: OAuth app registration blocked by Responsible Builder Policy; using public API (13 items/run)
 - **Proxy**: httpx 0.28 + `httpx[socks]` ignores `proxy=None` for localhost; RSSHub collector uses `AsyncHTTPTransport()` to bypass
 - **YouTube RSS deprecated**: YouTube permanently disabled RSS feeds (404). Migrated to Data API v3 `playlistItems.list` in v0.15.0. `YOUTUBE_DATA_API_KEY` is now required.
-- **RSSHub sources**: Jike disabled (no user IDs configured); Baoyu Blog depends on RSSHub at localhost:1200. RSSHub collector probes reachability before fetching.
+- **RSSHub sources**: Jike disabled (no user IDs configured). Baoyu Blog now supports direct RSS fallback; RSSHub is optional.

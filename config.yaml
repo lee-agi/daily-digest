@@ -218,14 +218,34 @@ sources:
     lookback_hours: 24 # 7天窗口（博客更新频率低）
     max_items: 10
     rsshub_base: http://localhost:1200
+    rsshub_bases:
+      - http://localhost:1200
+      - https://rsshub.app
     route: /baoyu/blog
+    fallback_feeds:
+      - https://baoyu.io/feed.xml
+      - https://www.baoyu.io/feed.xml
 
   weread:
     enabled: true
-    source_type: browser_relay
+    source_type: rss
     score_threshold: 0
-    lookback_hours: 24
-    max_items: 10
+    lookback_hours: 168
+    max_items: 30
+    feeds:
+      - https://rsshub.app/qq/weread/newbook
+      - https://rsshub.app/qq/weread/rise
+      - https://rsshub.app/qq/weread/hot_search
+
+  kindle_books:
+    enabled: true
+    source_type: rss
+    score_threshold: 0
+    lookback_hours: 168
+    max_items: 30
+    feeds:
+      - https://rsshub.app/amazon/kindle/software-updates
+      - https://rsshub.app/bookfere/ebook
 
   manual_urls:
     enabled: true
