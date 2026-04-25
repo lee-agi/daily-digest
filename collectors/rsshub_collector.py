@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 import feedparser
 import httpx
@@ -247,5 +248,67 @@ class XiaoyuzhouCollector(BaseCollector):
 
 
 class BaoyuBlogCollector(RSSHubCollector):
-    """宝玉博客 via RSSHub /baoyu/blog."""
+    """宝玉博客订阅，支持 RSSHub 与直连 RSS 双通道兜底。"""
     source_name = "baoyu_blog"
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        super().__init__(config)
+        self.route = config.get("route", "/baoyu/blog")
+        self.fallback_feeds = config.get("fallback_feeds", [])
+        self.rsshub_bases = config.get("rsshub_bases", [self.rsshub_base])
+
+    def _build_feed_urls(self) -> list[str]:
+        urls: list[str] = []
+        urls.extend(self.fallback_feeds)
+        for base in self.rsshub_bases:
+            base = (base or "").rstrip("/")
+            if not base:
+                continue
+            urls.append(f"{base}{self.route}")
+
+        # Preserve order while deduplicating
+        return list(dict.fromkeys(urls))
+
+    @staticmethod
+    def _is_localhost_url(url: str) -> bool:
+        host = (urlparse(url).hostname or "").lower()
+        return host in {"localhost", "127.0.0.1"}
+
+    async def collect(self) -> list[ContentItem]:
+        """Try all configured feeds; return merged fresh entries."""
+        urls = self._build_feed_urls()
+        if not urls:
+            logger.info("[baoyu_blog] No feeds configured")
+            return []
+
+        items: list[ContentItem] = []
+        seen_urls: set[str] = set()
+
+        transport = httpx.AsyncHTTPTransport()
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            async with httpx.AsyncClient(
+                timeout=30, follow_redirects=True, transport=transport,
+            ) as local_client:
+                for url in urls:
+                    active_client = (
+                        local_client if self._is_localhost_url(url) else client
+                    )
+                    try:
+                        resp = await self._request_with_retry(active_client, url)
+                        resp.raise_for_status()
+                        feed = feedparser.parse(resp.text)
+                    except httpx.HTTPError as exc:
+                        logger.warning("[baoyu_blog] Failed to fetch %s: %s", url, exc)
+                        continue
+
+                    for entry in feed.entries:
+                        item = self._parse_entry(entry)
+                        if item.published_at < self.cutoff_time:
+                            continue
+                        if item.url and item.url in seen_urls:
+                            continue
+                        if item.url:
+                            seen_urls.add(item.url)
+                        items.append(item)
+
+        return items

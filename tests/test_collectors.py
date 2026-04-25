@@ -24,6 +24,7 @@ import collectors.huggingface_papers  # noqa: F401
 import collectors.coolpaper_collector  # noqa: F401
 import collectors.x_twitter  # noqa: F401
 import collectors.weread_collector  # noqa: F401
+import collectors.kindle_collector  # noqa: F401
 import collectors.apple_podcast  # noqa: F401
 import collectors.anthropic_blog  # noqa: F401
 import collectors.openai_blog  # noqa: F401
@@ -47,7 +48,7 @@ class TestCollectorRegistration:
             "x_twitter", "weread", "apple_podcast",
             "anthropic", "openai", "google_blog",
             "ccf_bestpaper", "cn_tech_blog", "baoyu_blog",
-            "producthunt",
+            "producthunt", "kindle_books",
         }
         registered = set(CollectorRegistry.all_names())
         assert expected.issubset(registered), f"Missing: {expected - registered}"

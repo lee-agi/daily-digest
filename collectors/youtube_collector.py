@@ -30,6 +30,18 @@ YT_DATA_API_URL = "https://www.googleapis.com/youtube/v3/videos"
 _VIDEO_ID_RE = re.compile(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})")
 
 
+def _get_api_key() -> str:
+    """Read YouTube Data API key from env vars.
+
+    Supports both the canonical ``YOUTUBE_DATA_API_KEY`` and a legacy alias
+    ``YOUTUBE_API_KEY`` for backward compatibility.
+    """
+    return (
+        os.environ.get("YOUTUBE_DATA_API_KEY", "").strip()
+        or os.environ.get("YOUTUBE_API_KEY", "").strip()
+    )
+
+
 def _uploads_playlist_id(channel_id: str) -> str:
     """Derive the uploads playlist ID from a channel ID.
 
@@ -51,10 +63,10 @@ class YouTubeCollector(BaseCollector):
         self.channels = config.get("channels", [])
 
     async def collect(self) -> list[ContentItem]:
-        api_key = os.environ.get("YOUTUBE_DATA_API_KEY", "").strip()
+        api_key = _get_api_key()
         if not api_key:
             logger.warning(
-                "[youtube] YOUTUBE_DATA_API_KEY not set, skipping collection"
+                "[youtube] YOUTUBE_DATA_API_KEY/YOUTUBE_API_KEY not set, skipping collection"
             )
             return []
 
@@ -159,7 +171,7 @@ class YouTubeCollector(BaseCollector):
         Updates each item's ``score`` to engagement_rate * 1e6 and stores
         raw stats in ``extra["youtube_stats"]``.
         """
-        api_key = os.environ.get("YOUTUBE_DATA_API_KEY", "").strip()
+        api_key = _get_api_key()
         if not api_key or not items:
             return
 
