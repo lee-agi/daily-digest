@@ -223,8 +223,8 @@ sources:
       - https://rsshub.app
     route: /baoyu/blog
     fallback_feeds:
+      - https://s.baoyu.io/feed.xml
       - https://baoyu.io/feed.xml
-      - https://www.baoyu.io/feed.xml
 
   weread:
     enabled: true
@@ -232,20 +232,64 @@ sources:
     score_threshold: 0
     lookback_hours: 168
     max_items: 30
+    enrich_search: true
+    ranking:
+      finished_weight: 0.05
+      rating_percent_weight: 0.03
+      total_words_weight: 0.05
+      free_ratio_weight: 0.03
+      ai_keypoint_weight: 0.04
+      max_total_words: 1500000
     feeds:
-      - https://rsshub.app/qq/weread/newbook
-      - https://rsshub.app/qq/weread/rise
-      - https://rsshub.app/qq/weread/hot_search
+      - http://localhost:1200/qq/weread/newbook
+      - http://localhost:1200/qq/weread/rise
+      - http://localhost:1200/qq/weread/hot_search
+
+  douban:
+    enabled: false
+    source_type: http_scrape
+    score_threshold: 0
+    lookback_hours: 168
+    max_items: 20
+    pages:
+      - name: Douban Chart
+        kind: chart
+        url: https://book.douban.com/chart
+        top_n: 10
+      - name: Douban Latest
+        kind: latest
+        url: https://book.douban.com/latest
+        top_n: 10
 
   kindle_books:
     enabled: true
-    source_type: rss
+    source_type: http_scrape
     score_threshold: 0
     lookback_hours: 168
     max_items: 30
-    feeds:
-      - https://rsshub.app/amazon/kindle/software-updates
-      - https://rsshub.app/bookfere/ebook
+    top_n_per_category: 8
+    categories:
+      - name: Computers & Technology
+        kind: tech
+        url: https://www.amazon.com/amz-books/discover?node=5&navStore=digital-text&ref=ebooks_dsk_sn_computers-tec-e91b2
+      - name: Science & Math
+        kind: tech
+        url: https://www.amazon.com/amz-books/discover?node=75&navStore=digital-text&ref=ebooks_dsk_sn_science-math-2ecb3
+      - name: Business & Money
+        kind: non_tech
+        url: https://www.amazon.com/amz-books/discover?node=3&navStore=digital-text&ref=ebooks_dsk_sn_business-11c2b
+      - name: History
+        kind: non_tech
+        url: https://www.amazon.com/amz-books/discover?node=9&navStore=digital-text&ref=ebooks_dsk_sn_history-non-f-9d382
+      - name: Politics & Social Sciences
+        kind: non_tech
+        url: https://www.amazon.com/amz-books/discover?node=3377866011&navStore=digital-text&ref=books_dsk_sn_politics-soci-00b1a
+      - name: Biographies & Memoirs
+        kind: non_tech
+        url: https://www.amazon.com/amz-books/discover?node=2&navStore=digital-text&ref=ebooks_dsk_sn_biographies-a-d2c78
+      - name: Literature & Fiction
+        kind: non_tech
+        url: https://www.amazon.com/amz-books/discover?node=17&navStore=digital-text&ref=ebooks_dsk_sn_literature-fi-968d0
 
   manual_urls:
     enabled: true
@@ -330,4 +374,4 @@ distribution:
     enabled: true
     channel: openclaw-weixin
     to: o9cq802DYuyhrHBAn7SHotXRWxlE@im.wechat
-    account_id: 17f8c0a8ad14-im-bot
+    account_id: f75dd0b565c4-im-bot

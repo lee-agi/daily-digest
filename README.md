@@ -16,8 +16,11 @@ uv pip install -r <(python -c "import tomllib; d=tomllib.load(open('pyproject.to
 cp .env.example .env
 # 编辑 .env 填入 API keys
 
-# 3. 启动 RSSHub (可选，即刻需要；宝玉博客有 fallback)
+# 3. 启动 RSSHub（WeRead / Kindle 现在默认走本地 RSSHub）
+# 先确保 Docker Desktop 已启动，再执行：
 docker-compose -f docker/docker-compose.yml up -d
+# 若本机不用 Docker，也可尝试单独运行 RSSHub（需自行安装）
+# npx rsshub
 
 # 4. 运行
 python orchestrator.py --full --dry-run --no-enrich  # 完整流程（不推送，不 enrich）
