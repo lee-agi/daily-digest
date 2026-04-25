@@ -135,6 +135,14 @@ def _check_credentials(config: dict) -> None:
     """Log credential status for each enabled source. INFO only, non-blocking."""
     import os
 
+    def _first_set(*names: str) -> tuple[str, str]:
+        """Return (matched_name, value) for the first non-empty env var."""
+        for name in names:
+            val = os.environ.get(name, "").strip()
+            if val:
+                return name, val
+        return "", ""
+
     cred_map: dict[str, list[tuple[str, str]]] = {
         "x_twitter": [
             ("TWITTER_API_IO_KEY", "TwitterAPI.io primary"),
@@ -155,15 +163,23 @@ def _check_credentials(config: dict) -> None:
         if not src.get("enabled", False):
             continue
         for env_var, desc in creds:
-            val = os.environ.get(env_var, "").strip()
+            if source_name == "youtube" and env_var == "YOUTUBE_DATA_API_KEY":
+                matched_env, val = _first_set("YOUTUBE_DATA_API_KEY", "YOUTUBE_API_KEY")
+                label = "YOUTUBE_DATA_API_KEY|YOUTUBE_API_KEY"
+                used = matched_env or "none"
+            else:
+                val = os.environ.get(env_var, "").strip()
+                label = env_var
+                used = env_var if val else "none"
             if val:
                 logger.info(
-                    "[credentials] %s: %s (%s) = set", source_name, env_var, desc,
+                    "[credentials] %s: %s (%s) = set (using: %s)",
+                    source_name, label, desc, used,
                 )
             else:
                 logger.warning(
                     "[credentials] %s: %s (%s) = MISSING",
-                    source_name, env_var, desc,
+                    source_name, label, desc,
                 )
 
 

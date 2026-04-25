@@ -1,8 +1,4 @@
-"""WeRead + Kindle books collector via configurable RSS feeds.
-
-This replaces the old browser-relay placeholder with an actual feed-based
-collector so daily runs can always produce book items without CDP dependency.
-"""
+"""Kindle books collector (RSS/Atom feeds)."""
 
 from __future__ import annotations
 
@@ -20,14 +16,10 @@ from schema import ContentItem, SourceType
 logger = logging.getLogger(__name__)
 
 
-class WeReadCollector(BaseCollector):
-    """Collect hot books from WeRead/Kindle related RSS feeds.
+class KindleBooksCollector(BaseCollector):
+    """Collect Kindle high-quality books from configurable feeds."""
 
-    Config keys:
-    - ``feeds``: list of RSS/Atom URLs for WeRead/Kindle books.
-    """
-
-    source_name = "weread"
+    source_name = "kindle_books"
     source_type = SourceType.RSS
 
     def __init__(self, config: dict[str, Any], **kwargs: Any) -> None:
@@ -36,7 +28,7 @@ class WeReadCollector(BaseCollector):
 
     async def collect(self) -> list[ContentItem]:
         if not self.feeds:
-            logger.info("[weread] No feeds configured")
+            logger.info("[kindle_books] No feeds configured")
             return []
 
         items: list[ContentItem] = []
@@ -48,12 +40,12 @@ class WeReadCollector(BaseCollector):
                     resp.raise_for_status()
                     feed = feedparser.parse(resp.text)
                 except httpx.HTTPError as exc:
-                    logger.warning("[weread] Failed to fetch %s: %s", feed_url, exc)
+                    logger.warning("[kindle_books] Failed to fetch %s: %s", feed_url, exc)
                     continue
 
-                source_title = feed.feed.get("title", "WeRead/Kindle")
+                feed_title = feed.feed.get("title", "Kindle")
                 for entry in feed.entries:
-                    item = self._parse_entry(entry, source_title)
+                    item = self._parse_entry(entry, feed_title)
                     if not item:
                         continue
                     if item.published_at < self.cutoff_time:
@@ -66,36 +58,28 @@ class WeReadCollector(BaseCollector):
 
         return items
 
-    def _parse_entry(self, entry: dict[str, Any], source_title: str) -> ContentItem | None:
+    def _parse_entry(self, entry: dict[str, Any], feed_title: str) -> ContentItem | None:
         title = (entry.get("title") or "").strip()
         if not title:
             return None
 
-        published = self._parse_published(entry)
         content = entry.get("summary", "") or ""
-        author = entry.get("author", "")
         url = entry.get("link", "")
-
-        tags = ["book"]
-        title_lower = title.lower()
-        source_lower = source_title.lower()
-        if "kindle" in title_lower or "kindle" in source_lower:
-            tags.append("kindle")
-        if "微信读书" in source_title or "weread" in source_lower:
-            tags.append("weread")
+        author = entry.get("author", "")
+        published_at = self._parse_published(entry)
 
         return ContentItem(
-            source="weread",
+            source="kindle_books",
             source_type=SourceType.RSS,
             title=title,
             url=url,
             author=author,
             content=content[:500],
-            published_at=published,
+            published_at=published_at,
             score=0.0,
-            tags=tags,
-            language="zh",
-            extra={"feed_title": source_title},
+            tags=["book", "kindle"],
+            language="en",
+            extra={"feed_title": feed_title},
         )
 
     @staticmethod
@@ -109,11 +93,11 @@ class WeReadCollector(BaseCollector):
                     pass
 
         for raw_field in ("published", "updated"):
-            value = entry.get(raw_field)
-            if not value:
+            raw_date = entry.get(raw_field)
+            if not raw_date:
                 continue
             try:
-                dt = dateutil_parser.parse(value)
+                dt = dateutil_parser.parse(raw_date)
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
                 return dt
