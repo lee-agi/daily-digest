@@ -184,6 +184,20 @@ def _check_credentials(config: dict) -> None:
                 )
 
 
+def _latest_source_health(target_date: str) -> dict | None:
+    candidates = sorted(
+        [p for p in DATA_DIR.glob(f"source-health-{target_date}*.json") if p.name.startswith(f"source-health-{target_date}-")],
+        key=lambda p: p.stat().st_mtime,
+    )
+    if not candidates:
+        return None
+    try:
+        return json.loads(candidates[-1].read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("Failed to load source health file %s: %s", candidates[-1], exc)
+        return None
+
+
 async def run_collect(
     config: dict,
     target_date: str,
@@ -213,6 +227,37 @@ async def run_collect(
     # Run all collectors concurrently
     results: list[CollectorResult] = await asyncio.gather(
         *(c.run() for c in collectors)
+    )
+
+    # Conservative self-repair pass: if a source is unavailable, try one safe
+    # local repair/retry before allowing the report to proceed. Unresolved
+    # sources are written into source-health JSON and surfaced in the report.
+    failed_indices = [idx for idx, result in enumerate(results) if not result.success]
+    if failed_indices:
+        from report.source_repair import attempt_source_repair
+        logger.warning(
+            "Detected %d unavailable source(s), attempting self-repair before summarization: %s",
+            len(failed_indices), [results[idx].source for idx in failed_indices],
+        )
+        repaired = await asyncio.gather(*(
+            attempt_source_repair(collectors[idx], results[idx]) for idx in failed_indices
+        ))
+        for idx, repaired_result in zip(failed_indices, repaired, strict=True):
+            results[idx] = repaired_result
+
+    # Save source availability/repair status for report generation and later audit.
+    from report.source_repair import source_health_summary
+    source_health = source_health_summary(results)
+    ts = datetime.now().strftime("%H%M")
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    source_health_path = DATA_DIR / f"source-health-{target_date}-{ts}.json"
+    source_health_path.write_text(json.dumps(source_health, ensure_ascii=False, indent=2), encoding="utf-8")
+    config["_source_health"] = source_health
+    logger.info(
+        "Saved source health to %s (failed=%d, repaired=%d)",
+        source_health_path,
+        len(source_health.get("failed_sources", [])),
+        len(source_health.get("repaired_sources", [])),
     )
 
     # Dedup against state DB unless explicitly disabled (useful for historical backfills)
@@ -294,6 +339,11 @@ async def run_summarize_and_push(
         logger.warning("No items to summarize for %s", target_date)
         return
 
+    if "_source_health" not in config:
+        latest_health = _latest_source_health(target_date)
+        if latest_health is not None:
+            config["_source_health"] = latest_health
+
     # Generate report
     from report.generator import generate_digest_report
     report = await generate_digest_report(items, config, target_date)
@@ -306,29 +356,62 @@ async def run_summarize_and_push(
         logger.error("Generated report looks truncated; aborting save/push for %s", target_date)
         sys.exit(2)
 
-    # Save markdown report
+    # Save markdown report and push in a single guarded critical section to
+    # avoid multiple saves/pushes from the same run (coverage-supplement -> re-save
+    # scenarios can otherwise create two distinct feed items). We use an exclusive
+    # lock file per target_date so concurrent or re-entrant attempts skip pushing.
+    import os
+
     output_dir = Path(config["general"]["output_dir"]).expanduser()
     output_dir.mkdir(parents=True, exist_ok=True)
     beijing_tz = timezone(timedelta(hours=8))
     time_suffix = report.generated_at.astimezone(beijing_tz).strftime("%H%M")
     report_path = output_dir / f"digest-{target_date}-{time_suffix}.md"
-    report_path.write_text(report.full_markdown, encoding="utf-8")
-    logger.info("Report saved to %s", report_path)
 
-    if dry_run:
-        logger.info("[DRY-RUN] Skipping push to RSS/Feishu (items NOT marked seen)")
-        return
+    # Attempt to acquire a simple filesystem lock for this date. If the lock
+    # already exists, assume another concurrent step already handled pushing and
+    # skip the distribution step here to avoid duplicate feed items.
+    lock_path = DATA_DIR / f"push-lock-{target_date}.lock"
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(fd)
+        acquired = True
+    except FileExistsError:
+        logger.warning("Push lock exists for %s; skipping push to avoid duplicate items", target_date)
+        acquired = False
 
-    # Push to RSS Worker + Feishu
-    from report.push import push_report
-    await push_report(report, config)
+    try:
+        # Always write the report file (overwrite is fine). This ensures we keep
+        # the latest final version locally for audits even if we skip pushing.
+        report_path.write_text(report.full_markdown, encoding="utf-8")
+        logger.info("Report saved to %s", report_path)
 
-    # Mark items as seen ONLY after successful push.
-    # This prevents re-runs/dry-runs from losing items.
-    conn = get_connection()
-    mark_seen(conn, items)
-    conn.close()
-    logger.info("Marked %d items as seen after successful push", len(items))
+        if not acquired:
+            logger.info("[SKIP] Not pushing because another run holds the push lock")
+            return
+
+        if dry_run:
+            logger.info("[DRY-RUN] Skipping push to RSS/Feishu (items NOT marked seen)")
+            return
+
+        # Push to RSS Worker + Feishu
+        from report.push import push_report
+        await push_report(report, config)
+
+        # Mark items as seen ONLY after successful push.
+        # This prevents re-runs/dry-runs from losing items.
+        conn = get_connection()
+        mark_seen(conn, items)
+        conn.close()
+        logger.info("Marked %d items as seen after successful push", len(items))
+
+    finally:
+        # Release lock if we created it.
+        try:
+            if acquired and lock_path.exists():
+                lock_path.unlink()
+        except Exception:
+            logger.exception("Failed to release push lock: %s", lock_path)
 
 
 # Sources eligible for enrichment in --enrich-only mode
