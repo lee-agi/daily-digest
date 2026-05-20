@@ -5,9 +5,115 @@
 general:
   lookback_hours: 24          # Default time window for all sources
   max_items_per_source: 100   # Default max items per source
-  output_dir: ~/Developer/research/daily-digest
-  intermediate_dir: ./data    # JSON intermediate files
+  # Non-PII AI Daily reports go through the Report vault inbox; PII reports
+  # such as email/life digests use their own configs/scripts under
+  # ~/Developer/research/daily-digest.
+  output_dir: /Users/lee/Library/Mobile Documents/iCloud~md~obsidian/Documents/Report/000 inbox/daily-digest
+  intermediate_dir: /Users/lee/Documents/data/daily-digest    # JSON intermediate files
   log_level: INFO
+
+feedback_report:
+  enabled: true               # Local-only Markdown report generated after a successful AI Daily summarize.
+  output_dir: reports/eval
+
+feedback_card:
+  enabled: false              # External Discord card is opt-in; fill channel/target before enabling.
+  output_dir: reports/eval
+  sample_limit: 5
+  # channel: discord
+  # target: channel:<discord-channel-or-thread-id>
+  # account: default
+  # thread_id: <optional-thread-id>
+
+ai_daily:
+  prefilter:
+    enabled: true
+    mode: deterministic        # Optional cheap_model config below is not called by local tests.
+    min_score: 0.35
+    cheap_model:
+      enabled: false
+      model_id: microsoft-foundry/llab-gpt-5-mini
+      alias: "llab-gpt-5 mini"
+      route_uncertain_only: true
+      uncertain_min_score: 0.20
+      uncertain_max_score: 0.50
+      timeout_seconds: 8
+  topic_classifier:
+    enabled: true
+    mode: deterministic_with_optional_cheap_model
+    min_confidence: 0.68
+    uncertain_sources:
+      - x_twitter
+      - reddit
+      - zhihu
+      - jike
+      - hackernews
+      - alphaxiv
+      - youtube
+      - apple_podcast
+      - xiaoyuzhou
+      - producthunt
+      - cn_tech_blog
+      - baoyu_blog
+    cheap_model:
+      enabled: false           # Hook is implemented; keep false until production model routing is explicitly tested.
+      model_id: microsoft-foundry/llab-gpt-5-mini
+      alias: "llab-gpt-5 mini"
+      route_uncertain_only: true
+      timeout_seconds: 8
+      max_items_per_batch: 40
+  dimension_scoring:
+    mode: deterministic        # Future objective JSON scorer must follow the schema in aggregator.event_cluster.
+  event_ranking:
+    score_scale: 10.0
+    heat_weight: 8.0
+    dimension_weights:
+      lee_relevance: 0.25
+      technical_importance: 0.24
+      product_impact: 0.19
+      business_impact: 0.16
+      novelty: 0.13
+      confidence: 0.06
+    topic_weights:
+      AI Models & Agent: 1.40    # Lee calibration: "AI Models & Agent"
+      Infrastructure & Systems: 1.20
+      Research Papers: 1.00    # paper rank comes from paper_quality_score, not generic topic boost
+      Developer Tools: 1.00
+      Videos & Podcasts: 1.00
+      Finance & Markets: 0.85
+      Books & Reading: 0.70
+      Social & Community: 0.50
+    cross_source_bonus_per_identity: 0.10
+    max_cross_source_bonus: 0.45
+    cluster_size_bonus_per_extra_item: 0.04
+    max_cluster_size_bonus: 0.25
+    low_confidence_threshold: 0.0
+    low_confidence_multiplier: 1.0
+    research_paper_topic_cap: 1.0
+    ordinary_paper_multiplier: 0.72
+    incremental_paper_multiplier: 0.84
+    solid_paper_multiplier: 0.96
+    strong_paper_multiplier: 1.08
+    breakthrough_paper_multiplier: 1.18
+    survey_paper_cap: 0.80
+    top_headlines_quota:
+      enabled: true
+      max_per_source: 3
+      max_per_umbrella: 1
+      max_per_topic:
+        Research Papers: 3
+        Social & Community: 2
+        Books & Reading: 1
+        Finance & Markets: 2
+      min_required_if_available:
+        Developer Tools: 1
+        Infrastructure & Systems: 1
+    release_update_multipliers:
+      major: 0.85       # e.g. v1.0.0 / v2.0.0: still important, only lightly discounted
+      minor: 0.55       # e.g. v0.30.0 / v1.2.0: useful but usually not a top headline
+      patch: 0.35       # e.g. v1.2.3: strong downweight
+      prerelease: 0.25  # e.g. v0.30.0-rc20: very strong downweight
+      unknown: 0.50
 
 sources:
   x_twitter:
@@ -54,6 +160,133 @@ sources:
       - chipdesign
       - technology
     # client_id/secret: from env REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET
+
+  hackernews:
+    enabled: true
+    source_type: api
+    score_threshold: 90        # Composite HN hotness score; raw points/comments stored in extra
+    lookback_hours: 24
+    max_items: 40              # Daily top/high-comment/high-hotness HN stories
+    story_sources:
+      - topstories
+      - beststories
+    max_ids_per_endpoint: 150
+    max_concurrency: 20
+    min_score: 80              # Raw HN points threshold
+    min_comments: 25           # High-discussion threshold
+    top_rank_cutoff: 80        # Keep currently hot/top-ranked stories even if young
+    focus_min_score: 45        # Lower threshold for AI/LLM-infra stories
+    focus_min_comments: 12
+    focus_top_rank_cutoff: 120
+    # Hardware terms are only focus terms when paired with AI/ML/model context.
+    ambiguous_focus_keywords: [gpu, nvidia, cuda]
+    focus_context_keywords:
+      - ai
+      - artificial intelligence
+      - machine learning
+      - deep learning
+      - llm
+      - large language model
+      - model
+      - inference
+      - training
+      - pytorch
+      - transformer
+      - agent
+      - openai
+      - anthropic
+      - deepmind
+    include_algolia_focus: true # Extra AI/infra recall via HN Algolia search
+    algolia_hits_per_query: 10
+    algolia_focus_queries:
+      - LLM
+      - OpenAI
+      - Anthropic
+      - Claude
+      - AI agent
+      - machine learning
+      - inference
+      - GPU
+      - Nvidia
+      - CUDA
+      - vLLM
+      - SGLang
+      - Megatron
+      - Triton
+      - TensorRT
+      - model serving
+      - inference serving
+      - distributed training
+      - LLM inference
+      - AI infrastructure
+    focus_topics:
+      ai:
+        - ai
+        - artificial intelligence
+        - machine learning
+        - deep learning
+        - llm
+        - large language model
+        - gpt
+        - chatgpt
+        - openai
+        - anthropic
+        - claude
+        - gemini
+        - deepmind
+        - mistral
+        - llama
+        - copilot
+        - inference
+        - transformer
+        - diffusion
+        - agent
+        - agents
+        - rag
+        - vector database
+        - embedding
+        - gpu
+        - nvidia
+        - cuda
+      infra:
+        # Lee means LLM/AI infrastructure here, not generic cloud/backend infra.
+        - ai infrastructure
+        - ai infra
+        - llm infrastructure
+        - llm infra
+        - inference infrastructure
+        - inference infra
+        - training infra
+        - inference serving
+        - model serving
+        - llm serving
+        - distributed training
+        - pretraining
+        - pre-training
+        - training system
+        - gpu
+        - nvidia
+        - cuda
+        - triton
+        - tensorrt
+        - megatron
+        - vllm
+        - sglang
+        - deepspeed
+        - ray
+        - torch compile
+        - pytorch
+        - kv cache
+        - attention kernel
+        - flash attention
+        - quantization
+        - fp8
+        - hbm
+        - nvlink
+        - rdma
+        - nccl
+        - cluster
+        - accelerator
 
   youtube:
     enabled: true
@@ -105,7 +338,8 @@ sources:
         min_favorite: 100
       follow:
         min_voteup: 50
-        min_favorite: 10
+        # v3/moments no longer exposes favorite_count reliably.
+        min_favorite: 0
 
   jike:
     enabled: false
@@ -120,9 +354,15 @@ sources:
   xiaoyuzhou:
     enabled: true
     source_type: rss
-    score_threshold: 0
+    score_threshold: 80        # Composite from play/clap/favorite/comment metrics
     lookback_hours: 720        # 播客更新频率低，30天窗口
     max_items: 20
+    # feeds 是 Lee 已关注/指定的播客白名单；先按 feed 过滤，再按 engagement 过滤。
+    enrich_metrics: true
+    min_play_count: 1000
+    min_clap_count: 5
+    min_favorite_count: 10
+    min_comment_count: 0
     feeds:
       - https://feed.xyzfm.space/qw7x9eum9utp       # 搞钱女孩
       - https://feed.xyzfm.space/tmaapfx9v3hl        # 信号与噪声
@@ -200,12 +440,118 @@ sources:
       NeurIPS: 5               # ~1-5 scale
       ICML: 5                  # ~1-5 scale
 
+  openreview:
+    enabled: true
+    source_type: api
+    score_threshold: 60        # Keep accepted/latest-year submissions; 2025 is downweighted below
+    lookback_hours: 2160       # 90天窗口：会议接收/相机版发布频率低
+    max_items: 80
+    # Stable public API v2. Keep requests modest: observed limit is 60/min.
+    api_base: https://api2.openreview.net/notes
+    page_size: 25
+    limit_per_venue: 25
+    request_delay_seconds: 1.1
+    include_replies: false     # 避免 replies payload 过大；需要评审信号时再单独开启
+    venues:
+      - name: ICLR 2026
+        venue_id: ICLR.cc/2026/Conference
+        max_items: 30
+        base_score: 65          # Latest-year submissions are the primary signal
+      - name: ICLR 2025
+        venue_id: ICLR.cc/2025/Conference
+        max_items: 15
+        score_multiplier: 0.75  # Keep only stronger 2025 papers after thresholding
+      - name: NeurIPS 2025
+        venue_id: NeurIPS.cc/2025/Conference
+        max_items: 15
+        score_multiplier: 0.75
+      - name: ICML 2025
+        venue_id: ICML.cc/2025/Conference
+        max_items: 15
+        score_multiplier: 0.75
+
+  alphaxiv:
+    enabled: true
+    source_type: api
+    score_threshold: 0         # Keep scoring for ranking; hard filtering uses min_public_votes + AI/infra relevance below
+    lookback_hours: 168       # alphaXiv interval=3 Days，但发布时间用 7 天窗口兜底
+    max_items: 40
+    api_base: https://api.alphaxiv.org/papers/v3/feed
+    interval: "3 Days"       # API enum: "3 Days", "7 Days", "30 Days", "90 Days", "All time"
+    sorts:
+      - Hot
+      - Likes
+      - Views
+      - Comments
+    page_size: 20
+    pages_per_sort: 1
+    topics: []
+    min_visits_7d: 0          # Do not drop fresh papers just because visits_7d is still 0
+    min_public_votes: 5       # alphaXiv API exposes public_total_votes; use it as the primary community-like filter
+    require_ai_or_infra: true
+
   cn_tech_blog:
     enabled: true
     source_type: rss
-    score_threshold: 0
-    lookback_hours: 24 # 7天窗口（微信公众号更新频率不固定）
+    score_threshold: 25
+    lookback_hours: 24
     max_items: 30
+    require_allow_keyword: true
+    min_read_count: 0          # WeChat RSS usually does not expose reads/likes; use when available
+    min_like_count: 0
+    block_keywords:
+      - 广告
+      - 推广
+      - 软文
+      - 赞助
+      - 商务合作
+      - 立即报名
+      - 扫码报名
+      - 点击领取
+      - 课程
+      - 训练营
+      - 峰会报名
+      - 客户案例
+      - 解决方案
+      - PR稿
+      - PR 稿
+      - 新闻稿
+      - 通稿
+      - 品牌活动
+      - 厂商供稿
+    allow_keywords:
+      - AI
+      - AGI
+      - agent
+      - LLM
+      - 大模型
+      - 多模态
+      - inference
+      - 训练
+      - post-training
+      - 微调
+      - 模型
+      - 开源
+      - framework
+      - benchmark
+      - 评测
+      - GPU
+      - CUDA
+      - 算力
+      - infra
+      - 基础设施
+      - 机器人
+      - 具身智能
+      - 论文
+      - OpenAI
+      - Anthropic
+      - DeepMind
+      - Nvidia
+      - DeepSeek
+    source_weights:
+      机器之心: 25
+      量子位: 25
+      AI洞察日报 RSS Feed: 20
     feeds:
       - https://raw.githubusercontent.com/osnsyc/Wechat-Scholar/main/channels/gh_dbc0a5474692.xml  # 机器之心
       - https://raw.githubusercontent.com/osnsyc/Wechat-Scholar/main/channels/gh_114e76fd6e5d.xml  # 量子位
@@ -215,12 +561,11 @@ sources:
     enabled: true
     source_type: rss
     score_threshold: 0
-    lookback_hours: 24 # 7天窗口（博客更新频率低）
+    lookback_hours: 168 # 7天窗口（博客更新频率低）
     max_items: 10
     rsshub_base: http://localhost:1200
     rsshub_bases:
       - http://localhost:1200
-      - https://rsshub.app
     route: /baoyu/blog
     fallback_feeds:
       - https://s.baoyu.io/feed.xml
@@ -268,6 +613,7 @@ sources:
     lookback_hours: 168
     max_items: 30
     top_n_per_category: 8
+    # 图书推荐不只看技术/AI；保留商业、历史、人文社科、传记、文学等泛阅读分类。
     categories:
       - name: Computers & Technology
         kind: tech
@@ -304,10 +650,76 @@ sources:
   producthunt:
     enabled: true
     source_type: api
-    score_threshold: 0    # Already ordered by votesCount desc; no secondary filter needed
+    score_threshold: 50   # votesCount; ProductHuntCollector also filters before truncation
     lookback_hours: 24    # Placeholder — actual query uses PST day boundaries
-    max_items: 10         # Top 10 products of the day
+    max_items: 10         # Top focused products of the day
+    query_limit: 40       # Fetch more than max_items so topic/vote filters can work
+    min_votes: 50
+    topic_whitelist:
+      - Artificial Intelligence
+      - Developer Tools
+      - Productivity
+      - Design Tools
+      - Data & Analytics
+      - Open Source
+      - SaaS
+      - API
+      - GitHub
+      - No-Code
+    keyword_whitelist:
+      - ai
+      - agent
+      - llm
+      - developer
+      - api
+      - open source
+      - productivity
+      - automation
+      - data
+      - analytics
     # token: from env PRODUCTHUNT_API_TOKEN
+
+  finance:
+    enabled: true
+    source_type: rss
+    score_threshold: 20
+    lookback_hours: 48
+    max_items: 80
+    # Base ticker universe comes from Lee's DCA config; explicit tickers can add more.
+    include_dca_tickers: true
+    dca_config_path: /Users/lee/.openclaw/workspace/config/futu_dca.yaml
+    tickers: []
+    max_tickers: 40
+    items_per_ticker: 8
+    # Yahoo per-ticker RSS currently returns 404 in live validation; keep disabled
+    # until replaced with a verified endpoint. Market RSS + SEC Atom remain active.
+    include_yahoo_ticker_news: false
+    include_sec_filings: true
+    sec_user_agent: "OpenClaw Daily Digest zcwtuibian@gmail.com" # SEC requires contact-like UA
+    sec_forms:
+      - 8-K
+    # Optional read-only Futu watchlist import. Disabled by default so digest
+    # still runs when FutuOpenD/package is unavailable; enable after local smoke.
+    include_futu_watchlists: false
+    futu_host: 127.0.0.1
+    futu_port: 11111
+    futu_watchlist_groups:
+      - 默认关注
+      - 特别关注
+      - 关注
+    market_feeds:
+      - name: CNBC Markets
+        url: https://www.cnbc.com/id/100003114/device/rss/rss.html
+        weight: 12
+      - name: CNBC Investing
+        url: https://www.cnbc.com/id/100727362/device/rss/rss.html
+        weight: 15
+      - name: MarketWatch Top Stories
+        url: https://feeds.content.dowjones.io/public/rss/mw_topstories
+        weight: 10
+      - name: WSJ Markets
+        url: https://feeds.a.dj.com/rss/RSSMarketsMain.xml
+        weight: 15
 
 # Content enrichment via any2summary
 enrichment:
@@ -350,12 +762,141 @@ ad_filter:
       title_keywords: ["#ad", "#sponsored"]
 
 # Summary configuration
+industry_events:
+  enabled: true
+  horizon_days: 30
+  recent_days: 30
+  imminent_days: 7
+  weekly_reminder_weekday: 0  # Monday; non-imminent important events appear weekly, not daily
+  max_upcoming: 8
+  max_recent: 4
+  max_tba: 5
+  events:
+    - title: "Google I/O 2026"
+      organizer: "Google"
+      location: "Online"
+      start_date: "2026-05-19"
+      end_date: "2026-05-20"
+      url: "https://io.google/2026/"
+      priority: 10
+      focus:
+        - "Gemini / Android / Chrome / Web AI"
+        - "agent 与开发者工具更新"
+        - "端侧 AI 与多模态产品落地"
+    - title: "NVIDIA GTC Taipei at COMPUTEX"
+      organizer: "NVIDIA"
+      location: "Taipei / COMPUTEX"
+      start_date: "2026-06-01"
+      end_date: "2026-06-04"
+      url: "https://www.nvidia.com/gtc/"
+      priority: 15
+      focus:
+        - "GPU / AI infrastructure / inference stack"
+        - "Blackwell/Rubin 路线与生态合作"
+        - "startups & VCs sessions"
+    - title: "2026 北京智源大会"
+      organizer: "BAAI"
+      location: "Beijing"
+      start_date: "2026-06-12"
+      end_date: "2026-06-13"
+      url: "https://2026.baai.ac.cn/about"
+      priority: 20
+      focus:
+        - "基础模型 / AI for Science / 开源生态"
+        - "国内 AI 研究与产业议程"
+    - title: "Create 2026 百度 AI 开发者大会"
+      organizer: "Baidu"
+      location: "China"
+      start_date: "2026-05-13"
+      end_date: "2026-05-14"
+      url: "https://create2026.events.net.cn/"
+      priority: 25
+      focus:
+        - "国产大模型与应用开发生态"
+        - "百度 AI 工具链 / 智能体产品"
+    - title: "AICon 2026 上海站"
+      organizer: "InfoQ"
+      location: "Shanghai"
+      start_date: "2026-06-19"
+      end_date: "2026-06-20"
+      url: "https://aicon.infoq.cn/2026/shanghai"
+      priority: 35
+      focus:
+        - "AI 工程化 / 应用开发 / 企业落地"
+        - "国内技术团队实践分享"
+    - title: "WAIC Academic 2026"
+      organizer: "WAIC"
+      location: "Shanghai"
+      start_date: "2026-07-03"
+      end_date: "2026-07-05"
+      url: "https://waica2026.worldaic.com.cn/"
+      priority: 40
+      focus:
+        - "世界人工智能大会学术议程"
+        - "中国 AI 政策、科研与产业生态"
+    - title: "NVIDIA GTC Berlin"
+      organizer: "NVIDIA"
+      location: "Berlin"
+      start_date: "2026-10-20"
+      end_date: "2026-10-22"
+      url: "https://www.nvidia.com/gtc/"
+      priority: 60
+      focus:
+        - "欧洲 AI / robotics / industrial AI"
+        - "全球算力生态后续路线"
+    - title: "Anthropic Events"
+      organizer: "Anthropic"
+      location: "Virtual / Global"
+      start_date: "2026-05-05"
+      url: "https://www.anthropic.com/events"
+      priority: 30
+      focus:
+        - "Claude enterprise / agents / vertical briefings"
+        - "模型公司面向行业的产品化节奏"
+    - title: "Google Cloud Next 2026"
+      organizer: "Google Cloud"
+      location: "Mandalay Bay Conference Center"
+      start_date: "2026-04-22"
+      url: "https://www.googlecloudnext.com/"
+      priority: 5
+      note: "已错过但需要补课：本次早报体系未有效捕捉，后续应从云厂商活动页/Anthropic events/YouTube 回放补齐。"
+      focus:
+        - "Google Cloud AI / Gemini enterprise / partner ecosystem"
+        - "云厂商 AI 基础设施与企业 agent 发布"
+    - title: "OpenAI DevDay 2026"
+      organizer: "OpenAI"
+      url: "https://openai.com/devday/"
+      priority: 12
+      focus:
+        - "开发者 API / agent 平台 / 多模态模型发布"
+        - "时间待公布，需持续关注官方公告"
+    - title: "红杉 / Sequoia AI 技术与创业分享"
+      organizer: "Sequoia / HongShan"
+      url: "https://www.sequoiacap.com/ai/"
+      priority: 45
+      focus:
+        - "AI-native startups / agent 商业模式 / 投资机构技术判断"
+        - "跟踪 Sequoia Capital、HongShan、YouTube 与公众号侧公开分享"
+    - title: "极客公园 Founder Park / 创新大会后续分享"
+      organizer: "GeekPark / Founder Park"
+      url: "https://www.geekpark.net/"
+      priority: 50
+      focus:
+        - "国内 AI 创业者、产品和一级市场观点"
+        - "适合作为中国侧技术/产业分享来源持续跟踪"
+
 summary:
   model: opus                  # Single-pass Opus summary
+  link_validation:
+    enabled: true              # Validate report hyperlinks and drop hard-dead URLs before summarization
+    timeout_seconds: 6
+    concurrency: 20
   categories:
-    - "AI Models & Research"
+    - "AI Models & Agent"
     - "Developer Tools"
+    - "Infrastructure & Systems"
     - "Research Papers"
+    - "Finance & Markets"
     - "Videos & Podcasts"
     - "Books & Reading"
     - "Social & Community"

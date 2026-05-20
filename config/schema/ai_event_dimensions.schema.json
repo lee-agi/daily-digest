@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daily-digest.local/config/schema/ai_event_dimensions.schema.json",
+  "title": "AI Daily Objective Event Dimension Scores",
+  "description": "Objective dimension scores that an optional cheap/LLM scorer may emit. Final ranking is always computed deterministically by code.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "technical_importance",
+    "product_impact",
+    "business_impact",
+    "novelty",
+    "lee_relevance",
+    "confidence"
+  ],
+  "properties": {
+    "technical_importance": {"type": "number", "minimum": 0, "maximum": 10},
+    "product_impact": {"type": "number", "minimum": 0, "maximum": 10},
+    "business_impact": {"type": "number", "minimum": 0, "maximum": 10},
+    "novelty": {"type": "number", "minimum": 0, "maximum": 10},
+    "lee_relevance": {"type": "number", "minimum": 0, "maximum": 10},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 10}
+  }
+}
