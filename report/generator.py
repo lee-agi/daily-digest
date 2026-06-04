@@ -14,6 +14,7 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
+from urllib.parse import quote
 
 from aggregator.dedup import deduplicate
 from aggregator.event_cluster import cluster_content_items, event_cluster_payload, select_top_event_clusters
@@ -50,9 +51,11 @@ DIGEST_PROMPT = """你是一个多源信息聚合摘要助手。你的任务是�
 - 使用输入中 `selected_top_headline=true` 的事件簇，并按 `selection_rank` 从小到大输出；不要改用未选中的高分同源/同主题/同 umbrella 事件
 - 不要重新把同一 `event_id` 的 supporting_sources 拆成多条
 - 每条用一句话概括，优先解释这个事件为什么重要，而不是复述标题
+- 对 `score_breakdown.community_practice_signal > 0`、`paper_quality_components.correction_signal > 0` 或 `industrial_practice > 0` 的事件，要尽量保留并明确标注为“社区实测/复现纠偏/生产实践信号”；社区实测属于低一档置信度，不能写成论文定论或官方结论
+- Podcast / YouTube 不按媒体类型硬限数量；如果是大模型/Agent 核心玩家技术负责人或一线建设者给出的高分量行业/技术认知，可以进入 Top Headlines。相反，普通课程、tutorial、paper club 只有在有新增洞察时才进 Top Headlines
 - 优先使用事件簇的 `url` / 主来源作为链接；`supporting_sources` 只作为旁证，不要挤占 Top Headlines 名额
 - 重要的、insightful、非共识的内容用 **加粗** 标识
-- 每条必须使用输入里的原始 url 作为链接；链接必须是 Markdown 标准格式 `[标题](<url>)`；禁止输出裸 URL；如果输入没有 url，直接省略链接，不要编造
+- 每条必须使用输入里的原始 url 作为链接；链接必须是 Markdown 标准格式 `[标题](url)`；禁止输出裸 URL；如果输入没有 url，直接省略链接，不要编造
 
 ### 2. 主题与分类精选
 把原来的“跨平台主题分析”和“分类详情”合并为一个部分，减少重复：
@@ -61,8 +64,9 @@ DIGEST_PROMPT = """你是一个多源信息聚合摘要助手。你的任务是�
 - 已进入 `Today's Top Headlines` 的事件不要在本节重复展示；本节只放 Top Headlines 之外的补充信号或更高层主题判断
 - 每个分类/主题都要有简短判断：不超过 5 句话，包含非共识的 insight；不要堆砌条目
 - 每个事件保留主来源原文链接；可在句末用“旁证：...”概括 supporting_sources，但不要堆链接
+- 社区 benchmark / 实机测试 / “无法 scale、不能作为 production default”这类实践信号，即使来源是 Reddit/HN/X，也要作为有价值的低置信度早期预警展示；措辞用“社区实测显示/有人复现发现/实践上可能受限”，不要写成确定事实
 - 作者存在时保留作者，不存在时直接省略，不要写“作者未知”或“Unknown author”
-- 链接必须来自输入 url，格式统一为 `[标题](<url>)`；禁止裸 URL；不要输出无法确认的链接
+- 链接必须来自输入 url，格式统一为 `[标题](url)`；禁止裸 URL；不要输出无法确认的链接
 - 如果是非中文内容，专业表达保留原文，口语化部分翻译成中文
 - 对于 Books & Reading 中带 `ranking` 字段的条目，优先把 `ranking.summary` 改写成自然语言解释；必要时再参考 `base_signal`、`base_score`、`multiplier`、`factors`。最终成稿中不要直接出现 `base_signal`、`base_score`、`multiplier`、`factors`、`rank_bonus`、`rating_bonus` 这类字段名，而要翻译成自然中文表达；也不要把乘数修正误读为原始热度本身
 
@@ -79,7 +83,7 @@ DIGEST_PROMPT = """你是一个多源信息聚合摘要助手。你的任务是�
 1. 遵守“表达与术语原则”，避免硬翻专业词汇；常见口语可自然中文化
 2. 不要压缩、省略或遗漏任何关键信息
 3. 将重要的、insightful 的内容用 markdown **加粗** 标识，特别重要的用 `高亮`
-4. 所有链接必须是 Markdown 标准格式 `[label](<url>)`；禁止裸 URL；禁止输出 404/410 等硬失效链接
+4. 所有链接必须是 Markdown 标准格式 `[label](url)`；禁止裸 URL；禁止输出 404/410 等硬失效链接
 
 请输出完整的 Markdown 格式报告。
 """
@@ -107,7 +111,9 @@ CHUNK_SUMMARY_PROMPT = """你是 Daily Digest 的分块摘要器。下面是当�
 输出要求：
 - 中文为主，保留必要英文术语。
 - 分成三段：`### 重要候选`、`### 主题信号`、`### 分类补充`。
-- 重要候选最多 12 个事件；每个事件必须保留输入中的主来源 Markdown 链接 `[标题](<url>)`，没有 url 就不编造；不要把同一 `event_id` 的 supporting_sources 拆成多条。
+- 重要候选最多 12 个事件；每个事件必须保留输入中的主来源 Markdown 链接 `[标题](url)`，没有 url 就不编造；不要把同一 `event_id` 的 supporting_sources 拆成多条。
+- 优先保留 `community_practice_signal`、`correction_signal`、`industrial_practice`、`expert_media_signal` 这类实践/复现/生产/专家一手认知信号；社区实测要标低置信度，不能当官方定论。
+- Podcast / YouTube 不按媒体类型硬限数量；高分量专家访谈可进重要候选，普通课程/tutorial/paper club 只有在有新增洞察时才进重要候选。
 - 主题信号最多 5 条，每条 1-2 句，指出为什么值得关注。
 - 分类补充按分类列出，每类最多 3 条。
 - 不要输出“平台统计”“信息源可用性”。
@@ -122,7 +128,7 @@ COMPACT_SUMMARY_PROMPT = """你是 Daily Digest 的中间压缩器。下面是�
 
 输出要求：
 - 保留 `### 重要候选`、`### 主题信号`、`### 分类补充` 三段。
-- 合并近似重复项，但必须保留原始 Markdown 链接 `[标题](<url>)`。
+- 合并近似重复项，但必须保留原始 Markdown 链接 `[标题](url)`。
 - 重要候选最多 18 条；主题信号最多 8 条；分类补充每类最多 4 条。
 - 不要输出平台统计或信息源状态。
 
@@ -139,13 +145,15 @@ CHUNK_FINAL_PROMPT = """你是 Daily Digest 的最终编辑。下面是同一天
 硬性保真要求：
 - `must_cover` 是系统从完整输入按事件分、来源权重、分类均衡挑出的重要事件台账；最终正文必须覆盖这些事件，至少保留标题或链接。
 - 如果某个重要事件不适合放进 Top Headlines，也要放入主题或分类补充；不要因为分块摘要压缩而丢失。
+- `community_practice_signal`、`correction_signal`、`industrial_practice`、`expert_media_signal` 是需要保留的报告信号；社区 benchmark / 实机测试 / “无法 scale、不能作为 production default”要标为低置信度实践信号，而不是论文或官方定论。
+- Podcast / YouTube 不按媒体类型硬限数量；高分量专家访谈可以进 Top Headlines，普通课程/tutorial/paper club 只有在有新增洞察时才进 Top Headlines。
 - 不要把同一 `event_id` 的 supporting_sources 拆成多个 Top Headlines；supporting_sources 只作为旁证。
 - 不要编造新链接；只能使用分块摘要或覆盖台账里的 Markdown 链接/URL。
 
 输出结构：
 ## 1. Today's Top {top_n} Headlines
 - 使用覆盖台账 `must_cover` 前 {top_n} 个事件；每条一句话概括。
-- 必须使用已有 Markdown 链接 `[标题](<url>)`；没有链接就不要编造。
+- 必须使用已有 Markdown 链接 `[标题](url)`；没有链接就不要编造。
 - 重要、insightful、非共识内容用 **加粗**。
 
 ## 2. 主题与分类精选
@@ -213,6 +221,15 @@ def _item_priority(category: str, item: dict) -> tuple[float, float, float, floa
 def _ledger_row(category: str, item: dict) -> dict:
     content = str(item.get("content") or "").strip()
     ranking = item.get("ranking") or {}
+    score_breakdown = item.get("score_breakdown") or {}
+    paper_components = score_breakdown.get("paper_quality_components") or {}
+    attention_signals: list[str] = []
+    if _safe_float(score_breakdown.get("community_practice_signal")) > 0:
+        attention_signals.append("社区实测/实践限制信号（低置信度）")
+    if _safe_float(paper_components.get("correction_signal")) > 0:
+        attention_signals.append("复现纠偏/适用边界信号")
+    if _safe_float(paper_components.get("industrial_practice")) > 0:
+        attention_signals.append("生产实践/工业部署信号")
     row = {
         "category": category,
         "event_id": item.get("event_id") or "",
@@ -230,6 +247,7 @@ def _ledger_row(category: str, item: dict) -> dict:
         "selected_top_headline": bool(item.get("selected_top_headline", False)),
         "selection_rank": item.get("selection_rank"),
         "canonical_event_key": item.get("canonical_event_key") or "",
+        "report_attention_signals": attention_signals,
         "reason": content[:220],
     }
     if ranking.get("summary"):
@@ -333,10 +351,12 @@ def _chunk_categorized_for_llm(
     return chunks
 
 
-def _item_markdown_link(row: dict) -> str:
+def _item_markdown_link(row: dict, *, max_title_chars: int | None = None) -> str:
     title = _display_title(str(row.get("title") or "Untitled"))
+    if max_title_chars and len(title) > max_title_chars:
+        title = title[: max_title_chars - 1].rstrip() + "…"
     url = str(row.get("url") or "").strip()
-    return f"[{title}](<{url}>)" if url else title
+    return _markdown_link(title, url) if url else title
 
 
 def _deterministic_chunk_summary(chunk: dict[str, list[dict]], chunk_index: int, chunk_count: int) -> str:
@@ -492,20 +512,19 @@ def _ensure_ledger_coverage(markdown: str, ledger: dict, config: dict) -> str:
         return markdown
 
     logger.warning("Final digest missed %d required ledger/category item(s); appending reader-facing supplement", len(missing))
+    supplement_number = 4 if "最近要发生的重要产业事件" in markdown else 3
     lines = [
         "",
-        "## 3. 仍值得保留的补充信号",
+        f"## {supplement_number}. 仍值得保留的补充信号",
         "",
-        "> 下面是未进入前两部分、但按来源质量和事件分数仍值得保留的少量信号，供后续延伸阅读。",
+        "> 下面是未进入前面主体部分、但按来源质量和事件分数仍值得保留的少量信号，供后续延伸阅读。",
         "",
     ]
     for row in missing:
         meta = " / ".join(filter(None, [str(row.get("category") or ""), str(row.get("source") or "")]))
-        reason = str(row.get("reason") or row.get("ranking_summary") or "").strip()
-        if len(reason) > 180:
-            reason = reason[:177].rstrip() + "…"
+        reason = _compact_inline_text(str(row.get("reason") or row.get("ranking_summary") or ""), max_chars=160)
         suffix = f"：{reason}" if reason else ""
-        lines.append(f"- {_item_markdown_link(row)}｜{meta}{suffix}")
+        lines.append(f"- {_item_markdown_link(row, max_title_chars=120)}｜{meta}{suffix}")
     return markdown.rstrip() + "\n" + "\n".join(lines).rstrip() + "\n"
 
 
@@ -711,7 +730,7 @@ def render_digest_from_event_ledger(
         title = _display_title(str(main.get("title") or event.get("title") or "Untitled"))
         url = str(main.get("url") or "").strip()
         if url:
-            return f"[{title}](<{url}>)"
+            return _markdown_link(title, url)
         return title
 
     selected_keys = {event_key(event) for event in selected}
@@ -739,7 +758,7 @@ def render_digest_from_event_ledger(
                         continue
                     src_title = _display_title(str(src.get("title") or src.get("source") or "source"))
                     src_url = str(src.get("url") or "").strip()
-                    labels.append(f"[{src_title}](<{src_url}>)" if src_url else src_title)
+                    labels.append(_markdown_link(src_title, src_url) if src_url else src_title)
                 if labels:
                     lines.append(f"   - 旁证：{' / '.join(labels)}")
     else:
@@ -1033,7 +1052,7 @@ def _event_markdown_link(event: dict) -> str:
     title = _clean_link_label(str(event.get("title") or "Untitled event").strip())
     url = str(event.get("url") or "").strip()
     if url.startswith("http://") or url.startswith("https://"):
-        return f"[{title}](<{url}>)"
+        return _markdown_link(title, url)
     return title
 
 
@@ -1231,8 +1250,14 @@ async def _validate_urls(urls: list[str], config: dict) -> dict[str, bool]:
         async with sem:
             try:
                 resp = await client.head(url, follow_redirects=True)
+                if _is_openable_status(resp.status_code):
+                    return url, True
                 if resp.status_code not in {405, 501}:
-                    return url, _is_openable_status(resp.status_code)
+                    logger.debug(
+                        "URL HEAD validation returned non-openable status; retrying with GET: url=%s status=%s",
+                        url,
+                        resp.status_code,
+                    )
             except Exception:
                 pass
             try:
@@ -1274,6 +1299,40 @@ def _clean_link_label(label: str) -> str:
     return (label or "link").replace("[", "").replace("]", "").strip() or "link"
 
 
+def _compact_inline_text(text: str, *, max_chars: int | None = None) -> str:
+    """Collapse source text into one safe Markdown-list line.
+
+    Source snippets from tweets or long posts can contain blank lines and raw
+    list bullets. If inserted after `：` in a report bullet, those newlines break
+    the surrounding list and make the chat/PDF preview look like unrelated
+    bullets. Keep them as concise inline prose before rendering.
+    """
+    compact = " ".join(str(text or "").split())
+    if max_chars and len(compact) > max_chars:
+        compact = compact[: max_chars - 1].rstrip() + "…"
+    return compact
+
+
+def _markdown_destination_url(url: str) -> str:
+    """Encode URL characters that break plain Markdown link destinations.
+
+    We store report links as `[title](url)` rather than CommonMark's
+    `[title](<url>)` form because several downstream renderers and chat clients
+    expose the literal angle brackets in clickable URLs. Encoding parentheses and
+    spaces keeps the plain destination parseable without leaking `<>` into PDF,
+    RSS, Discord, Weixin, or Obsidian previews.
+    """
+    return quote((url or "").strip(), safe=":/?#@!$&'*,;=%+")
+
+
+def _markdown_link(label: str, url: str) -> str:
+    label = _clean_link_label(label)
+    url = (url or "").strip()
+    if url.startswith("http://") or url.startswith("https://"):
+        return f"[{label}]({_markdown_destination_url(url)})"
+    return label
+
+
 def _markdown_link_pattern():
     import re
     # Allows one level of balanced square brackets inside the label, e.g.
@@ -1282,7 +1341,7 @@ def _markdown_link_pattern():
 
 
 def _normalize_markdown_links(markdown: str) -> str:
-    """Normalize raw/loose links to `[label](<url>)` markdown form."""
+    """Normalize raw/loose links to `[label](url)` markdown form."""
     import re
 
     link_re = _markdown_link_pattern()
@@ -1291,18 +1350,23 @@ def _normalize_markdown_links(markdown: str) -> str:
         label = _clean_link_label(match.group(1).strip())
         url = (match.group(2) or match.group(3) or "").strip()
         if url.startswith("http://") or url.startswith("https://"):
-            return f"[{label}](<{url}>)"
+            return _markdown_link(label, url)
         return match.group(0)
 
     markdown = link_re.sub(repl, markdown)
 
     # Convert remaining bare HTTP(S) URLs that are not already markdown targets.
-    bare_re = re.compile(r"(?<![<\(])(?<!\]\()https?://[^\s<>()]+")
+    bare_re = re.compile(r"(?<![<\(])(?<!\]\()https?://[^\s<>]+")
 
     def bare_repl(match):
-        url = match.group(0).rstrip(".,;:!?")
-        suffix = match.group(0)[len(url):]
-        return f"[link](<{url}>){suffix}"
+        raw = match.group(0)
+        url = raw
+        while url and url[-1] in ".,;:!?":
+            url = url[:-1]
+        while url.endswith(")") and url.count("(") < url.count(")"):
+            url = url[:-1]
+        suffix = raw[len(url):]
+        return f"[link]({_markdown_destination_url(url)}){suffix}"
 
     return bare_re.sub(bare_repl, markdown)
 
@@ -1400,7 +1464,7 @@ async def _sanitize_report_links(markdown: str, config: dict) -> str:
         if not (url.startswith("http://") or url.startswith("https://")):
             return match.group(0)
         if status.get(url, False):
-            return f"[{label}](<{url}>)"
+            return _markdown_link(label, url)
         logger.info("Removing non-openable report hyperlink: %s", url)
         return label
 
@@ -1408,12 +1472,21 @@ async def _sanitize_report_links(markdown: str, config: dict) -> str:
 
 
 def _display_title(title: str) -> str:
-    """Keep titles readable and prevent raw URLs from leaking into link labels."""
+    """Keep titles readable and prevent raw URLs from leaking into link labels.
+
+    Social collectors sometimes use the whole post body as `title`. For
+    multi-paragraph posts, use the first non-empty line as the clickable label
+    and leave the body snippet to the reason field; otherwise Markdown lists in
+    the original post can spill into the report as nested bullets.
+    """
     import re
 
-    cleaned = re.sub(r"https?://\S+", "", title or "").strip()
-    cleaned = _clean_link_label(cleaned)
-    return cleaned or _clean_link_label(title) or "Untitled"
+    raw = re.sub(r"https?://\S+", "", title or "").strip()
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    cleaned = lines[0] if lines else raw
+    cleaned = re.sub(r"^[-*•]\s+", "", cleaned).strip()
+    cleaned = _compact_inline_text(_clean_link_label(cleaned))
+    return cleaned or _compact_inline_text(_clean_link_label(title)) or "Untitled"
 
 
 def _build_llm_item_payload(item: ContentItem) -> dict:
@@ -2012,7 +2085,7 @@ def _generate_fallback_report(
             author = item.get("author", "")
             content = item.get("content", "")[:150]
             ranking = item.get("ranking") or {}
-            link = f"[{title}](<{url}>)" if url else title
+            link = _markdown_link(title, url) if url else title
             meta = " | ".join(filter(None, [author, source]))
             parts.append(f"- **{link}**{f' \u2014 {meta}' if meta else ''}")
             if content:

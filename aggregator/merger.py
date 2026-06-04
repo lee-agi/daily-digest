@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from copy import deepcopy
+from functools import lru_cache
 from typing import Any
 
 from schema import ContentItem
@@ -15,7 +16,7 @@ CATEGORY_RULES: dict[str, list[str]] = {
     "Infrastructure & Systems": [],
     "Research Papers": ["openreview"],  # Matched by arxiv_id presence too
     "Finance & Markets": ["finance"],
-    "Videos & Podcasts": ["youtube", "apple_podcast", "xiaoyuzhou"],
+    "Videos & Podcasts": ["youtube", "apple_podcast", "ai_exec_podcast", "xiaoyuzhou"],
     "Books & Reading": ["weread", "kindle_books", "douban"],
     "Social & Community": ["x_twitter", "reddit", "zhihu", "jike", "hackernews"],
 }
@@ -30,7 +31,7 @@ for cat, sources in CATEGORY_RULES.items():
 
 UNCERTAIN_TOPIC_SOURCES = {
     "x_twitter", "reddit", "zhihu", "jike", "hackernews", "alphaxiv",
-    "youtube", "apple_podcast", "xiaoyuzhou", "producthunt", "cn_tech_blog", "baoyu_blog",
+    "youtube", "apple_podcast", "ai_exec_podcast", "xiaoyuzhou", "producthunt", "cn_tech_blog", "baoyu_blog", "blog_feeds",
 }
 
 DEFAULT_TOPIC_CLASSIFIER_CONFIG: dict[str, Any] = {
@@ -52,12 +53,17 @@ _TOPIC_KEYWORDS: dict[str, set[str]] = {
     "AI Models & Agent": {
         "ai", "llm", "llms", "model", "models", "agent", "agents", "agentic",
         "openai", "anthropic", "claude", "chatgpt", "gpt", "gemini", "deepseek",
+        "kimi", "moonshot", "glm", "zhipu", "minimax", "xai", "grok", "llama", "meta",
+        "thinking machines", "thinking machine", "cursor",
         "multimodal", "reasoning", "alignment", "eval", "benchmark",
+        "大模型", "模型升级", "版本升级", "超长上下文", "多模态",
     },
     "Developer Tools": {
         "github", "release", "sdk", "api", "cli", "code", "coding", "developer",
         "devtools", "runtime", "library", "framework", "plugin", "workflow", "mcp",
         "copilot", "cursor", "codex", "opencode", "ollama",
+        "skill", "skills", "tool use", "function calling", "ai assistant", "ai assistants",
+        "开放平台", "开放能力", "服务调用", "一句话下单", "跑腿", "real-world service",
     },
     "Infrastructure & Systems": {
         "infra", "infrastructure", "server", "servers", "gpu", "cuda", "h100", "h200",
@@ -97,7 +103,7 @@ PRIMARY_AI_SOURCES = {
 }
 BROAD_SIGNAL_SOURCES = {
     "x_twitter", "reddit", "hackernews", "zhihu", "jike", "youtube",
-    "apple_podcast", "xiaoyuzhou", "producthunt", "cn_tech_blog", "github",
+    "apple_podcast", "ai_exec_podcast", "xiaoyuzhou", "producthunt", "cn_tech_blog", "blog_feeds", "github",
 }
 AI_RELEVANCE_TAGS = {
     "ai", "llm", "ml", "model", "models", "agent", "agents", "infra",
@@ -122,6 +128,104 @@ AI_RELEVANCE_TERMS = {
     "云", "算力", "芯片", "显卡", "推理", "训练", "大模型", "模型", "智能体", "多模态",
     "人工智能", "开源模型", "评测", "基准", "具身", "机器人", "自动驾驶", "代码生成",
 }
+
+PARADIGM_SHIFT_ROUTE_KEY = "route:paradigm-shift"
+PARADIGM_SHIFT_ROUTE_LABEL = "AI paradigm shift: alternatives to the mainstream scaling route"
+
+_PARADIGM_SHIFT_STRONG_PHRASES = {
+    # Named examples / anchors for non-mainstream scale routes.
+    "elf: embedded language flows",
+    "embedded language flows",
+    "cola-dlm",
+    "cola dlm",
+    "continuous latent diffusion language model",
+    "continuous latent-space diffusion language model",
+    "latent diffusion language model",
+    "diffusion language model",
+    "diffusion language models",
+    "recursive self-improvement",
+    "self-improving llm",
+    "self-improving language model",
+    "continual learning for language models",
+    "continual learning for llms",
+}
+_PARADIGM_SHIFT_ROUTE_PHRASES = {
+    # Alternative generation/objective routes.
+    "continuous embedding",
+    "continuous embeddings",
+    "continuous latent",
+    "continuous latent-space",
+    "continuous latent space",
+    "latent representation",
+    "latent representations",
+    "representation space",
+    "representation-space",
+    "discrete token",
+    "discrete tokens",
+    "token autoregression",
+    "flow matching",
+    "non-autoregressive",
+    "non autoregressive",
+    "not predict next token",
+    "not predicting next token",
+    "not next-token prediction",
+    "not next token prediction",
+    # Alternative learning/improvement routes.
+    "continual learning",
+    "continuous learning",
+    "continue learning",
+    "lifelong learning",
+    "online learning",
+    "test-time learning",
+    "test time learning",
+    "test-time adaptation",
+    "test time adaptation",
+    "self-improvement",
+    "self improvement",
+    "self-improving",
+    "self improving",
+    # Explicit anti-pure-scaling framing.
+    "beyond scaling",
+    "beyond scale",
+    "scaling alternative",
+    "alternatives to scaling",
+    "non-scaling",
+    "non scaling",
+    "非主流 scale",
+    "非 scale",
+}
+_PARADIGM_SHIFT_AI_CONTEXT = {
+    "ai",
+    "artificial intelligence",
+    "model",
+    "models",
+    "foundation model",
+    "foundation models",
+    "language model",
+    "language models",
+    "language generation",
+    "large language model",
+    "large language models",
+    "llm",
+    "llms",
+    "text generation",
+    "agent",
+    "agents",
+    "tokens",
+    "token",
+    "大模型",
+    "模型",
+    "智能体",
+}
+_PARADIGM_SHIFT_NEGATED_NEXT_TOKEN_RE = re.compile(
+    r"\b(?:not|without|beyond|abandon(?:ing)?|abandons?|drop(?:ping)?|drops?|"
+    r"do(?:es)?\s+not|doesn't|don't)\b\s+(?:\w+\s+){0,4}"
+    r"(?:predict(?:ing)?\s+(?:the\s+)?next[-\s]?token|next[-\s]?token\s+prediction)\b"
+)
+_PARADIGM_SHIFT_CHINESE_NEXT_TOKEN_RE = re.compile(
+    r"(?:放弃|不再|不是|并非|无需).{0,12}预测.{0,4}下一个\s*token",
+    re.IGNORECASE,
+)
 
 DEFAULT_CHEAP_RELEVANCE_MODEL = "microsoft-foundry/llab-gpt-5-mini"
 DEFAULT_RELEVANCE_PREFILTER_CONFIG: dict[str, Any] = {
@@ -193,6 +297,79 @@ def _item_search_text(item: ContentItem) -> str:
     return " ".join(p for p in parts if p).lower()
 
 
+@lru_cache(maxsize=8192)
+def _compact_text(text: str) -> str:
+    return re.sub(r"[\s_\-:：/·.'\"“”‘’「」]+", "", text.lower())
+
+
+def _contains_phrase_or_compact(text: str, phrase: str) -> bool:
+    phrase = phrase.lower()
+    return phrase in text or _compact_text(phrase) in _compact_text(text)
+
+
+@lru_cache(maxsize=4096)
+def _has_paradigm_shift_route_text(text: str) -> bool:
+    """Return true for a broader AI paradigm-shift route.
+
+    This theme sits above a single modeling family: it captures credible
+    alternatives to the current mainstream “scale larger transformers +
+    next-token prediction” path, including representation-space generation
+    (ELF/CoLa-DLM), continual/online learning, and self-improvement loops. The
+    detector stays phrase/context-gated so generic image diffusion or generic
+    lifelong-learning content does not route without AI/model context or a named
+    anchor.
+    """
+    normalized = re.sub(r"\s+", " ", (text or "").lower())
+    if any(_contains_phrase_or_compact(normalized, phrase) for phrase in _PARADIGM_SHIFT_STRONG_PHRASES):
+        return True
+
+    has_language_context = any(phrase in normalized for phrase in _PARADIGM_SHIFT_AI_CONTEXT)
+    if not has_language_context:
+        return False
+
+    route_hits = sum(
+        1
+        for phrase in _PARADIGM_SHIFT_ROUTE_PHRASES
+        if _contains_phrase_or_compact(normalized, phrase)
+    )
+    route_anchor = any(
+        _contains_phrase_or_compact(normalized, phrase)
+        for phrase in (
+            "flow matching",
+            "non-autoregressive",
+            "non autoregressive",
+            "continual learning",
+            "continuous learning",
+            "continue learning",
+            "lifelong learning",
+            "online learning",
+            "test-time learning",
+            "test time learning",
+            "test-time adaptation",
+            "test time adaptation",
+            "self-improvement",
+            "self improvement",
+            "self-improving",
+            "self improving",
+            "beyond scaling",
+            "beyond scale",
+            "scaling alternative",
+            "alternatives to scaling",
+        )
+    )
+    if route_hits >= 2 and route_anchor:
+        return True
+    return bool(
+        _PARADIGM_SHIFT_NEGATED_NEXT_TOKEN_RE.search(normalized)
+        or _PARADIGM_SHIFT_CHINESE_NEXT_TOKEN_RE.search(normalized)
+    )
+
+
+def paradigm_shift_route_signal(item: ContentItem) -> bool:
+    """Return whether an item belongs to the AI paradigm-shift route."""
+    return _has_paradigm_shift_route_text(_item_search_text(item))
+
+
 def is_ai_relevant_finance(item: ContentItem) -> bool:
     """Return true when a finance item is still relevant to AI Daily.
 
@@ -223,6 +400,8 @@ def ai_relevance_score(item: ContentItem) -> float:
 
     text = _item_search_text(item)
     score = 0.0
+    if _has_paradigm_shift_route_text(text):
+        score += 0.35
     if source in PRIMARY_AI_SOURCES:
         score += 0.35
     if tags & AI_RELEVANCE_TAGS:
@@ -354,6 +533,32 @@ def _explicit_topic_decision(item: ContentItem) -> dict[str, Any] | None:
                 "reason": str(classifier.get("reason") or "explicit topic override from item.extra"),
                 "model_used": bool(classifier.get("model_used", False)),
             }
+
+    search_text = _item_search_text(item)
+    normalized = search_text.lower()
+    service_skill_markers = (
+        " skill", "skills ", " ai助手", "ai 助手", "ai assistant", "mcp",
+        "开放能力", "开放平台", "服务调用", "一句话下单", "tool use", "function calling",
+    )
+    real_world_service_markers = (
+        "跑腿", "下单", "外卖", "打车", "配送", "预约", "上门", "酒店", "机票", "real-world service",
+    )
+    if any(marker in normalized for marker in service_skill_markers) and any(marker in normalized for marker in real_world_service_markers):
+        return {
+            "topic": "Developer Tools",
+            "confidence": 0.95,
+            "method": "deterministic_service_skill_promotion",
+            "reason": "traditional service opened Skill/API so AI assistants can directly call a real-world service",
+            "model_used": False,
+        }
+    if _has_paradigm_shift_route_text(normalized):
+        return {
+            "topic": "AI Models & Agent",
+            "confidence": 0.94,
+            "method": "deterministic_paradigm_shift_route",
+            "reason": "AI paradigm shift: credible alternative to the mainstream scale route, e.g. representation-space generation, continual learning, or self-improvement",
+            "model_used": False,
+        }
     return None
 
 
@@ -370,6 +575,13 @@ def _default_topic_for_item(item: ContentItem) -> tuple[str, str, float]:
         return "Research Papers", "arxiv_id present", 0.95
 
     topic = _SOURCE_TO_CATEGORY.get(item.source, "Social & Community")
+    text = f"{(item.title or '').lower()} {(item.content or '').lower()}"
+    model_release_markers = (
+        "deepseek", "kimi", "moonshot", "glm", "zhipu", "minimax", "xai", "grok", "llama", "meta",
+        "thinking machines", "thinking machine", "cursor", "大模型", "模型升级", "版本升级", "超长上下文", "多模态",
+    )
+    if topic == "Social & Community" and any(marker in text for marker in model_release_markers):
+        topic = "AI Models & Agent"
     confidence = 0.88 if item.source in _SOURCE_TO_CATEGORY else 0.55
     return topic, f"source mapping: {item.source or 'unknown'}", confidence
 
@@ -388,7 +600,7 @@ def _keyword_topic_scores(item: ContentItem) -> dict[str, float]:
         text_hits = text_tokens & keywords
         scores[topic] += min(0.45, len(tag_hits) * 0.18)
         scores[topic] += min(0.55, len(text_hits) * 0.08)
-    if item.source in {"youtube", "apple_podcast", "xiaoyuzhou"}:
+    if item.source in {"youtube", "apple_podcast", "ai_exec_podcast", "xiaoyuzhou"}:
         scores["Videos & Podcasts"] += 0.35
     if item.source in {"weread", "kindle_books", "douban"}:
         scores["Books & Reading"] += 0.50

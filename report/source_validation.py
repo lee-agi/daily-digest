@@ -14,7 +14,7 @@ from copy import deepcopy
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import yaml
 
@@ -67,6 +67,11 @@ DEFAULT_SOURCE_WEIGHTS: dict[str, float] = {
     "zhihu.com": 0.6,
     "xiaoyuzhou": 0.6,
     "xiaoyuzhoufm.com": 0.6,
+    "ai_exec_podcast": 1.5,
+    "blog_feeds": 1.0,
+    "nextsignalprediction.substack.com": 1.0,
+    "baoyu.io": 1.4,
+    "s.baoyu.io": 1.4,
     "weread": 0.5,
     "kindle_books": 0.5,
     "douban": 0.5,
@@ -93,9 +98,9 @@ DEFAULT_TIER_SOURCES: dict[str, set[str]] = {
         "microsoft", "meta", "nvidia", "apple", "baidu", "huggingface_blog",
         "openreview", "arxiv", "papers", "coolpaper", "ccf_bestpaper",
         "x_twitter", "github", "huggingface", "alphaxiv", "producthunt",
-        "apple_podcast", "youtube", "baoyu_blog",
+        "apple_podcast", "ai_exec_podcast", "youtube",
     },
-    "T2": {"reddit", "hackernews", "zhihu", "xiaoyuzhou", "cn_tech_blog"},
+    "T2": {"reddit", "hackernews", "zhihu", "xiaoyuzhou", "cn_tech_blog", "blog_feeds"},
     "T3": set(),
 }
 DEFAULT_TIER_HOSTS: dict[str, set[str]] = {
@@ -105,9 +110,9 @@ DEFAULT_TIER_HOSTS: dict[str, set[str]] = {
         "developer.nvidia.com", "apple.com", "machinelearning.apple.com",
         "huggingface.co", "openreview.net", "arxiv.org", "papers.cool",
         "x.com", "twitter.com", "github.com", "gist.github.com", "alphaxiv.org",
-        "producthunt.com", "youtube.com", "youtu.be",
+        "producthunt.com", "youtube.com", "youtu.be", "baoyu.io", "s.baoyu.io",
     },
-    "T2": {"reddit.com", "news.ycombinator.com", "zhihu.com"},
+    "T2": {"reddit.com", "news.ycombinator.com", "zhihu.com", "nextsignalprediction.substack.com"},
     "T3": set(),
 }
 
@@ -265,8 +270,10 @@ def source_identity(source: str | None = None, url: str | None = None) -> str:
     if host == "reddit.com":
         return "/".join([host, *path_parts[:2]]) if len(path_parts) >= 2 and path_parts[0] == "r" else host
     if host in {"youtube.com", "youtu.be"}:
-        video_id = parse_qs(parsed.query).get("v", [""])[0] or (path_parts[0] if host == "youtu.be" and path_parts else "")
-        return f"{host}/{video_id}" if video_id else host
+        # A YouTube video URL identifies a clip, not an independent source body.
+        # Without channel/account metadata, treating every video_id as a separate
+        # identity overstates cross-source corroboration for conference playlists.
+        return "youtube.com"
     if host in {"arxiv.org", "papers.cool", "alphaxiv.org", "openreview.net"}:
         return "/".join([host, *path_parts[-1:]]) if path_parts else host
     return host or normalize_source_name(source, raw_url).lower()
@@ -322,8 +329,9 @@ def evidence_score(sources: Iterable[Source]) -> float:
 def format_source_links(sources: Iterable[Source]) -> str:
     """Render sources as standard Markdown links, with weight for auditability.
 
-    Markdown angle-bracket destinations keep links valid when source URLs contain
-    literal parentheses or other punctuation copied from raw feeds.
+    URL destinations are percent-encoded where needed so the report can use
+    broadly compatible `[label](url)` links without leaking literal angle
+    brackets into PDF/chat clients.
     """
     parts: list[str] = []
     for src in sources:
@@ -332,7 +340,8 @@ def format_source_links(sources: Iterable[Source]) -> str:
         weight = float(src.get("weight", 0))
         label = f"{name}({weight:.1f})"
         if url:
-            parts.append(f"[{label}](<{url}>)")
+            encoded_url = quote(url, safe=":/?#@!$&'*,;=%+")
+            parts.append(f"[{label}]({encoded_url})")
         else:
             parts.append(label)
     return " / ".join(parts) if parts else "暂无"

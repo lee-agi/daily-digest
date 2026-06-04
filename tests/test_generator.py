@@ -448,10 +448,85 @@ class TestReportShapeAndLinks:
         monkeypatch.setattr(generator, "_validate_urls", fake_validate)
         text = "Good [ok](https://example.com/a) bad [dead](https://dead.example/404) raw https://example.com/raw"
         out = await generator._sanitize_report_links(text, {"summary": {"link_validation": {"enabled": True}}})
-        assert "[ok](<https://example.com/a>)" in out
-        assert "[link](<https://example.com/raw>)" in out
+        assert "[ok](https://example.com/a)" in out
+        assert "[link](https://example.com/raw)" in out
         assert "https://dead.example/404" not in out
         assert "dead" in out
+
+    @pytest.mark.asyncio
+    async def test_validate_urls_get_fallback_when_head_false_negative(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from report import generator
+
+        url = "https://vllm.ai/blog/2026-05-26-eagle-3-1"
+        calls: list[tuple[str, str]] = []
+        generator._URL_OPEN_CACHE.clear()
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def head(self, checked_url: str, *, follow_redirects: bool):
+                calls.append(("HEAD", checked_url))
+                return SimpleNamespace(status_code=404)
+
+            async def get(self, checked_url: str, *, follow_redirects: bool, headers: dict):
+                calls.append(("GET", checked_url))
+                assert headers == {"Range": "bytes=0-0"}
+                return SimpleNamespace(status_code=200)
+
+        monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+        result = await generator._validate_urls(
+            [url],
+            {"summary": {"link_validation": {"enabled": True, "timeout_seconds": 1, "concurrency": 1}}},
+        )
+
+        assert result[url] is True
+        assert calls == [("HEAD", url), ("GET", url)]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status_code", [401, 403, 429])
+    async def test_validate_urls_keeps_auth_and_rate_limit_head_status_without_get(
+        self, monkeypatch: pytest.MonkeyPatch, status_code: int
+    ) -> None:
+        from report import generator
+
+        url = f"https://x.com/example/status/{status_code}"
+        calls: list[tuple[str, str]] = []
+        generator._URL_OPEN_CACHE.clear()
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def head(self, checked_url: str, *, follow_redirects: bool):
+                calls.append(("HEAD", checked_url))
+                return SimpleNamespace(status_code=status_code)
+
+            async def get(self, checked_url: str, *, follow_redirects: bool, headers: dict):
+                raise AssertionError("GET should not run for retained anti-bot/auth statuses")
+
+        monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+        result = await generator._validate_urls(
+            [url],
+            {"summary": {"link_validation": {"enabled": True, "timeout_seconds": 1, "concurrency": 1}}},
+        )
+
+        assert result[url] is True
+        assert calls == [("HEAD", url)]
 
 
 class TestStreamingPayload:
@@ -1404,3 +1479,54 @@ def test_coverage_supplement_uses_reader_facing_title():
     assert "## 3. 仍值得保留的补充信号" in out
     assert "系统校验" not in out
     assert "https://example.com/important-ai-signal" in out
+
+
+def test_coverage_supplement_keeps_multiline_social_snippets_inline():
+    from report.generator import _ensure_ledger_coverage
+
+    ledger = {
+        "must_cover": [
+            {
+                "event_id": "evt-agent-os",
+                "title": "通用 Agent 就是未来的操作系统了\n\nApp 会有几种结局：\n- 消亡：Agent 自己就有能力，不需要独立的 App\n- 变成 CLI 或者 MCP：搭配 Skill 去让 Agent 调用",
+                "url": "https://x.com/dotey/status/2060949916256460894",
+                "category": "Social & Community",
+                "source": "x_twitter",
+                "reason": "通用 Agent 就是未来的操作系统了\n\nApp 会有几种结局：\n- 消亡：Agent 自己就有能力，不需要独立的 App\n- 变成 CLI 或者 MCP：搭配 Skill 去让 Agent 调用",
+            }
+        ],
+        "category_priorities": {},
+    }
+    out = _ensure_ledger_coverage("## 1. Today's Top Headlines\n\n- Other item", ledger, {"summary": {"coverage_required_items": 1}})
+    supplement = out.split("## 3. 仍值得保留的补充信号", 1)[1]
+    rendered_items = [line for line in supplement.splitlines() if line.startswith("- ")]
+    assert len(rendered_items) == 1
+    assert "\nApp 会有几种结局" not in supplement
+    assert "\n- 消亡" not in supplement
+    assert "App 会有几种结局： - 消亡" in supplement
+    assert "通用 Agent 就是未来的操作系统了](https://x.com/dotey/status/2060949916256460894)" in supplement
+    assert "变成 CLI 或者 MCP" not in supplement.split("](https://x.com/dotey/status/2060949916256460894)", 1)[0]
+
+
+def test_importance_ledger_marks_practice_and_correction_attention_signals() -> None:
+    from report.generator import _ledger_row
+
+    row = _ledger_row(
+        "AI Models & Agent",
+        {
+            "title": "TurboQuant follow-up community benchmark",
+            "url": "https://reddit.com/r/LocalLLaMA/comments/1sm6d2k/what_is_the_current_status_with_turbo_quant/",
+            "source": "reddit",
+            "score_breakdown": {
+                "community_practice_signal": 4.0,
+                "paper_quality_components": {
+                    "correction_signal": 2.0,
+                    "industrial_practice": 1.0,
+                },
+            },
+        },
+    )
+
+    assert "社区实测/实践限制信号（低置信度）" in row["report_attention_signals"]
+    assert "复现纠偏/适用边界信号" in row["report_attention_signals"]
+    assert "生产实践/工业部署信号" in row["report_attention_signals"]
